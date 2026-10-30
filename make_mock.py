@@ -1,8 +1,8 @@
-"""Builds fixtures/mock.json: about two months of made-up sessions for local preview.
+"""Builds mock.json: about two months of made-up sessions for local preview.
 
 The formula columns (Stage, day counts, Flag) are computed here the same way the
 sheet's formulas compute them, so the preview behaves like the real thing.
-Run: python3 scripts/make_mock.py
+Run: python3 make_mock.py
 """
 import datetime as dt
 import json
@@ -158,6 +158,6 @@ data = {
     "team": [[n, "", r, s] for n, r, s, _ in TEAM],
     "asOf": "Fri, Oct 30 (sample data)",
 }
-out = Path(__file__).resolve().parent.parent / "fixtures" / "mock.json"
+out = Path(__file__).resolve().parent / "mock.json"
 out.write_text(json.dumps(data, indent=1))
 print(f"{len(rows)} sample sessions written to {out}")

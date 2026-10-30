@@ -5,9 +5,9 @@ const crypto = require('crypto');
 const express = require('express');
 const cookieSession = require('cookie-session');
 const { OAuth2Client } = require('google-auth-library');
-const sheet = require('./lib/sheet');
-const { buildModel, allowedActions, ACTIONS } = require('./lib/model');
-const { buildAnalytics } = require('./lib/analytics');
+const sheet = require('./sheet');
+const { buildModel, allowedActions, ACTIONS } = require('./model');
+const { buildAnalytics } = require('./analytics');
 
 const {
   PORT = 3000,
@@ -98,8 +98,15 @@ function requireUser(req, res, next) {
   return res.redirect('/login');
 }
 
-app.get('/login', (req, res) => res.sendFile(path.join(__dirname, 'public', 'login.html')));
-app.use('/assets', express.static(path.join(__dirname, 'public', 'assets'), { maxAge: '1h' }));
+// All files sit in one folder (easy to upload through GitHub's website), so only
+// these two front-end files are served; nothing else in the folder is reachable.
+app.get('/login', (req, res) => res.sendFile(path.join(__dirname, 'login.html')));
+const ASSETS = { 'app.js': 'application/javascript', 'styles.css': 'text/css' };
+app.get('/assets/:file', (req, res) => {
+  const type = ASSETS[req.params.file];
+  if (!type) return res.status(404).end();
+  res.type(type).set('Cache-Control', 'public, max-age=3600').sendFile(path.join(__dirname, req.params.file));
+});
 
 // ---------- Who is signed in ----------
 // A Google email listed on the Team tab identifies the person automatically;
@@ -307,7 +314,7 @@ app.get('/api/analytics', requireUser, async (req, res) => {
   }
 });
 
-app.get('/', requireUser, (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+app.get('/', requireUser, (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 
 function page403(email) {
   const safe = String(email || '').replace(/[<>&"]/g, '');

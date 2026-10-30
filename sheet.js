@@ -9,7 +9,7 @@ const { google } = require('googleapis');
 
 const { SHEET_ID, GOOGLE_SERVICE_ACCOUNT_JSON, MOCK_DATA, NODE_ENV, TIMEZONE = 'America/Toronto' } = process.env;
 const mockMode = !!MOCK_DATA && NODE_ENV !== 'production';
-const MOCK_FILE = path.join(__dirname, '..', 'fixtures', 'mock.json');
+const MOCK_FILE = path.join(__dirname, 'mock.json');
 
 // Formula columns are filled down to this row. A new session needs an empty row above it.
 const LAST_FORMULA_ROW = 300;

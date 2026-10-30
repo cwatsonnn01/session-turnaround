@@ -60,12 +60,12 @@ npm install
 npm run dev
 ```
 
-Opens on http://localhost:3000 with the sample data in `fixtures/mock.json` and sign-in skipped. Nothing is written to the real sheet in this mode.
+Opens on http://localhost:3000 with the sample data in `mock.json` and sign-in skipped. Nothing is written to the real sheet in this mode.
 
 ## Sheet structure the app expects
 
 - **Sessions** tab, row 1 headers by name (columns can be moved): Client, Studio, Producer, Session, Brainstorm complete, Recorded, Sent to client, Client responded, Client decision, Rework returned, Approved, Scheduled in Planable, Stage, Internal days (recorded to sent), Client wait days, Rework overdue, Days recorded to approval, Past 5-day promise (recorded to sent), Flag, Notes, Nudge requested, Last updated by.
-- Formula columns are filled down to row 300. When the sheet gets close to that, copy the formulas further down and raise `LAST_FORMULA_ROW` in `lib/sheet.js`.
+- Formula columns are filled down to row 300. When the sheet gets close to that, copy the formulas further down and raise `LAST_FORMULA_ROW` in `sheet.js`.
 - **Clients** tab: Client, Studio, Contacts, Approver email. One row per studio the client works with.
 - **Studios** tab: the list of studios. Producers work across studios, so each session picks both its studio and its producer on the Sessions tab.
 - **Team** tab: Name, Google email, Role (Producer, CP Trainer or Ops). A Google email listed here identifies the person automatically; anyone at the domain who isn't listed can sign in as a viewer.
@@ -81,3 +81,7 @@ Opens on http://localhost:3000 with the sample data in `fixtures/mock.json` and 
 The server enforces this: view-only users get no buttons, and any write they attempt is refused.
 - Sessions column **Last updated by** records who clicked each button and when.
 - **Settings** tab rows 2 to 6: promise days, RED day, AMBER day, client target days, rework days.
+
+## File layout
+
+Everything is in one folder on purpose: GitHub's website flattens folders on upload in some browsers, so a flat layout always uploads correctly. Only `index.html`, `login.html`, `app.js` and `styles.css` are served to browsers; the server code and `mock.json` are never reachable from the web.
