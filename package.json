@@ -1,0 +1,20 @@
+{
+  "name": "session-turnaround",
+  "version": "1.0.0",
+  "description": "Demandii session turnaround dashboard. Reads and writes the Session Turnaround Tracker Google Sheet.",
+  "main": "server.js",
+  "private": true,
+  "scripts": {
+    "start": "node server.js",
+    "dev": "MOCK_DATA=1 node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "cookie-session": "^2.1.0",
+    "express": "^4.21.0",
+    "google-auth-library": "^9.14.0",
+    "googleapis": "^144.0.0"
+  }
+}

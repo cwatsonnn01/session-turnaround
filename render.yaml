@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: session-turnaround
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: SHEET_ID
+        value: 1ytC6cHvDoIiLy_hI3RC5SwEYdr_nRFLuTPKdb-SIDW8
+      - key: ALLOWED_DOMAIN
+        value: demandii.com
+      - key: TIMEZONE
+        value: America/Toronto
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: BASE_URL
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_SERVICE_ACCOUNT_JSON
+        sync: false

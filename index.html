@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Session Turnaround · Demandii</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="/assets/styles.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">
+      <span class="wordmark">DEMANDII</span>
+      <span class="divider" aria-hidden="true"></span>
+      <span class="product">Session turnaround</span>
+    </div>
+    <nav id="views" class="views" aria-label="Views" hidden>
+      <button type="button" data-view="board" aria-pressed="true">Board</button>
+      <button type="button" data-view="analytics" aria-pressed="false">Analytics</button>
+    </nav>
+    <div class="who">
+      <span id="user-name"></span>
+      <button type="button" id="switch-user" class="link-btn" hidden>Switch</button>
+      <button type="button" id="logout" class="link-btn">Sign out</button>
+    </div>
+  </div>
+</header>
+
+<div id="mock-banner" class="mock-banner" hidden>Preview with sample data. Nothing here is written to the real sheet.</div>
+<div id="readonly-banner" class="readonly-banner" hidden>View only. Producers, Ops and the CP Trainer update sessions.</div>
+
+<main class="wrap" id="board-view">
+  <section class="intro">
+    <div>
+      <h1 id="board-title">Is every session on the clock?</h1>
+      <p id="as-of" class="muted"></p>
+    </div>
+    <div class="toolbar" role="toolbar" aria-label="Filters">
+      <div id="studio-filters" class="pills"></div>
+      <button type="button" id="mine-toggle" class="pill" aria-pressed="false" hidden>My sessions</button>
+      <button type="button" id="flagged-toggle" class="pill" aria-pressed="false">Flagged only</button>
+      <button type="button" id="done-toggle" class="pill" aria-pressed="false">Show finished</button>
+      <button type="button" id="refresh" class="pill">Refresh</button>
+      <button type="button" id="new-client" class="pill" hidden>+ Add client</button>
+      <button type="button" id="add-session" class="btn-primary" hidden>+ Log session</button>
+    </div>
+  </section>
+
+  <section id="kpis" class="kpis" aria-label="Summary"></section>
+
+  <div class="layout">
+    <div id="studios" class="studios" aria-live="polite">
+      <div class="loading">Loading the tracker…</div>
+    </div>
+    <aside class="side">
+      <section class="panel panel-red">
+        <h2>Needs Tamika</h2>
+        <p class="muted small">RED only. Everything else stays with the producer.</p>
+        <div id="escalations" class="stack"></div>
+      </section>
+      <section class="panel">
+        <h2>Waiting on clients</h2>
+        <p class="muted small">Past the 48-hour review target. Outside the 5-day promise, so it never turns a session RED.</p>
+        <div id="client-late" class="stack"></div>
+      </section>
+      <section class="panel">
+        <h2>How flags work</h2>
+        <ul id="legend" class="legend"></ul>
+      </section>
+    </aside>
+  </div>
+</main>
+
+<main class="wrap" id="analytics-view" hidden>
+  <section class="intro">
+    <div>
+      <h1>How each studio is doing</h1>
+      <p id="an-sub" class="muted"></p>
+    </div>
+    <div class="toolbar" role="toolbar" aria-label="Time window">
+      <button type="button" class="pill" data-days="30" aria-pressed="true">Last 30 days</button>
+      <button type="button" class="pill" data-days="90" aria-pressed="false">Last 90 days</button>
+      <button type="button" class="pill" data-days="all" aria-pressed="false">All time</button>
+    </div>
+  </section>
+
+  <section id="an-kpis" class="kpis" aria-label="Overall"></section>
+
+  <section class="panel">
+    <h2>By studio</h2>
+    <p class="muted small">Days to client = business days from the end of recording to content in the client's inbox. The yellow marker is the 5-day promise.</p>
+    <div class="table-wrap"><table class="an-table" id="an-studios"></table></div>
+  </section>
+
+  <section class="panel">
+    <h2>By content producer</h2>
+    <div class="table-wrap"><table class="an-table" id="an-producers"></table></div>
+  </section>
+
+  <section class="panel">
+    <h2>Clients affected</h2>
+    <p class="muted small">Clients with a session past the 5-day promise or currently flagged, worst first.</p>
+    <div class="table-wrap"><table class="an-table" id="an-clients"></table></div>
+  </section>
+</main>
+
+<dialog id="who-dialog" aria-labelledby="who-title">
+  <div class="who-pick" id="who-step-name">
+    <h2 id="who-title">Who are you?</h2>
+    <p class="muted small">Asked once per sign-in. Your name goes on every update you make.</p>
+    <div id="who-list" class="who-list"></div>
+    <button type="button" class="pill who-viewer" data-who="__viewer">I'm not on this list, just viewing</button>
+  </div>
+  <div class="who-pick" id="who-step-studio" hidden>
+    <h2>Which studio are you in?</h2>
+    <p class="muted small" id="studio-hint"></p>
+    <div id="studio-list" class="who-list"></div>
+    <button type="button" class="pill who-viewer" id="who-back">Back</button>
+  </div>
+</dialog>
+
+<dialog id="add-dialog" aria-labelledby="add-title">
+  <form id="add-form" method="dialog">
+    <h2 id="add-title">Log a new session</h2>
+    <p class="step-label">1. Client</p>
+    <label for="add-client" class="sr-only">Client</label>
+    <select id="add-client" required></select>
+    <div id="add-studio-wrap" class="field" hidden>
+      <p class="step-label">2. Studio</p>
+      <label for="add-studio" class="sr-only">Studio</label>
+      <p class="muted small">This client works with more than one studio.</p>
+      <select id="add-studio"></select>
+    </div>
+    <p id="add-studio-auto" class="muted small" hidden></p>
+    <p class="step-label" id="producer-step">2. Producer</p>
+    <label for="add-producer" class="sr-only">Producer</label>
+    <select id="add-producer" required></select>
+    <p class="step-label" id="name-step">3. Session name</p>
+    <label for="add-name" class="sr-only">Session name</label>
+    <input id="add-name" required maxlength="80" placeholder="e.g. Session 16">
+    <fieldset class="rec-step">
+      <legend class="step-label" id="rec-step">4. Recording</legend>
+      <label class="radio"><input type="radio" name="rec" value="yes" checked> Recorded on</label>
+      <input id="add-recorded" type="date" aria-label="Recording date">
+      <label class="radio"><input type="radio" name="rec" value="no"> Not recorded yet</label>
+      <p class="muted small">The 5-day clock starts on the recording date, not the day you log it.</p>
+    </fieldset>
+    <p id="add-error" class="error" role="alert" hidden></p>
+    <div class="dialog-actions">
+      <button type="button" id="add-cancel" class="pill">Cancel</button>
+      <button type="submit" class="btn-primary">Add session</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="client-dialog" aria-labelledby="client-title">
+  <form id="client-form" method="dialog">
+    <h2 id="client-title">Add a client</h2>
+    <p class="muted small">Adds a row to the Clients tab. A client already in another studio gets this studio added.</p>
+    <label for="c-name" class="step-label">Client name</label>
+    <input id="c-name" required maxlength="100" list="c-existing" autocomplete="off" placeholder="e.g. Acme Corp">
+    <datalist id="c-existing"></datalist>
+    <label for="c-studio" class="step-label">Studio</label>
+    <select id="c-studio" required></select>
+    <label for="c-contacts" class="step-label">Contacts <span class="muted small">(optional)</span></label>
+    <input id="c-contacts" maxlength="300" placeholder="e.g. Jane Smith, Ali Khan">
+    <label for="c-emails" class="step-label">Approver email <span class="muted small">(optional, comma between several)</span></label>
+    <input id="c-emails" maxlength="400" placeholder="jane@acme.com">
+    <p id="c-error" class="error" role="alert" hidden></p>
+    <div class="dialog-actions">
+      <button type="button" id="c-cancel" class="pill">Cancel</button>
+      <button type="submit" class="btn-primary">Add client</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="rec-dialog" aria-labelledby="rec-title">
+  <form id="rec-form" method="dialog">
+    <h2 id="rec-title">When was it recorded?</h2>
+    <p class="muted small" id="rec-which"></p>
+    <label for="rec-date" class="step-label">Recording date</label>
+    <input id="rec-date" type="date" required>
+    <p class="muted small">The 5-day clock starts on this date. Up to 14 days back.</p>
+    <p id="rec-error" class="error" role="alert" hidden></p>
+    <div class="dialog-actions">
+      <button type="button" id="rec-cancel" class="pill">Cancel</button>
+      <button type="submit" class="btn-primary">Start the clock</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast" class="toast" role="status" hidden></div>
+<script src="/assets/app.js"></script>
+</body>
+</html>
