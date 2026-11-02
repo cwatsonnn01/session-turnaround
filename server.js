@@ -89,6 +89,15 @@ app.post('/auth/logout', (req, res) => {
   res.json({ ok: true });
 });
 
+// Preview only (never in production): switch who you are, e.g. /dev/as?email=tamika@demandii.com
+if (mockMode) {
+  app.get('/dev/as', (req, res) => {
+    const email = String(req.query.email || 'preview@demandii.com');
+    req.session.user = { email, name: email.split('@')[0], picture: '' };
+    res.redirect('/');
+  });
+}
+
 function requireUser(req, res, next) {
   if (mockMode && !req.session.user) {
     req.session.user = { email: 'preview@demandii.com', name: 'Preview User', picture: '' };
@@ -109,33 +118,24 @@ app.get('/assets/:file', (req, res) => {
 });
 
 // ---------- Who is signed in ----------
-// A Google email listed on the Team tab identifies the person automatically;
-// otherwise they pick their name once per login. Producers also pick the studio
-// they are working in. Anyone else at the domain can choose "just viewing".
-const VIEWER = '__viewer';
+// People are identified only by their Google email on the Team tab:
+//   Producer (CP)          their own sessions, read-only. Chaser drives the data.
+//   CP Trainer, Ops        everything, analytics, and corrections.
+//   anyone else @domain    viewer: analytics and a read-only board.
 const MANAGERS = ['CP Trainer', 'Ops'];
 
 function identify(req, model) {
   const email = String(req.session.user.email || '').toLowerCase();
-  let t = model.team.find((x) => x.email && x.email === email);
-  const auto = !!t;
-  if (!t) {
-    if (req.session.as === VIEWER) return { name: null, role: 'Viewer', studio: null, auto: false, canWrite: false, canManageClients: false, canSeeAnalytics: true };
-    t = req.session.as && model.team.find((x) => x.name === req.session.as);
-  }
-  if (!t) return null;
-  const isProducer = t.role === 'Producer';
-  const studio = isProducer && model.studioNames.includes(req.session.studio) ? req.session.studio : null;
+  const t = model.team.find((x) => x.email && x.email === email);
+  if (!t) return { name: null, role: 'Viewer', canWrite: false, canManageClients: false, canSeeAnalytics: true, ownOnly: false };
+  const manager = MANAGERS.includes(t.role);
   return {
     name: t.name,
     role: t.role,
-    homeStudio: t.studio || null,
-    studio,
-    auto,
-    needsStudio: isProducer && !studio,
-    canWrite: isProducer ? !!studio : MANAGERS.includes(t.role),
-    canManageClients: MANAGERS.includes(t.role),
-    canSeeAnalytics: !isProducer,
+    canWrite: manager,
+    canManageClients: manager,
+    canSeeAnalytics: t.role !== 'Producer',
+    ownOnly: t.role === 'Producer',
   };
 }
 
@@ -144,49 +144,36 @@ function stamp(req, me) {
   return `${who}, ${sheet.todayISO()}`;
 }
 
-app.post('/api/whoami', requireUser, async (req, res) => {
-  const name = String((req.body || {}).name || '');
-  const studio = String((req.body || {}).studio || '');
-  try {
-    const model = buildModel(await sheet.readAll());
-    if (name === VIEWER) {
-      req.session.as = VIEWER;
-      req.session.studio = null;
-      return res.json({ ok: true });
-    }
-    const t = model.team.find((x) => x.name === name);
-    if (!t) return res.status(400).json({ error: 'That name is not on the Team tab.' });
-    const byEmail = model.team.find((x) => x.email && x.email === String(req.session.user.email).toLowerCase());
-    if (byEmail && byEmail.name !== name) {
-      return res.status(403).json({ error: `Your Google account is set up as ${byEmail.name}.` });
-    }
-    if (t.role === 'Producer') {
-      if (!model.studioNames.includes(studio)) return res.status(400).json({ error: 'Pick the studio you are working in.' });
-      req.session.studio = studio;
-    } else {
-      req.session.studio = null;
-    }
-    req.session.as = name;
-    res.json({ ok: true });
-  } catch (err) {
-    console.error('Whoami failed:', err.message);
-    res.status(502).json({ error: 'Could not read the tracker sheet.' });
-  }
-});
-
 // ---------- Data API ----------
 app.get('/api/data', requireUser, async (req, res) => {
   try {
     const raw = await sheet.readAll();
     const { index, sessions, team, ...model } = buildModel(raw);
-    const me = identify(req, { team, studioNames: model.studioNames });
-    if (!me || !me.canWrite) {
-      // View-only: no buttons.
+    const me = identify(req, { team });
+    if (!me.canWrite) {
       model.studios.forEach((st) => st.clients.forEach((c) => c.sessions.forEach((s) => { s.actions = []; })));
+    }
+    if (me.ownOnly) {
+      // A CP only receives their own sessions.
+      const mine = (x) => x.producer === me.name;
+      model.studios = model.studios
+        .map((st) => {
+          const clients = st.clients.map((c) => ({ ...c, sessions: c.sessions.filter(mine) })).filter((c) => c.sessions.length);
+          const own = [].concat(...clients.map((c) => c.sessions));
+          const count = (f) => own.filter((x) => x.flag === f).length;
+          // Counts and names cover only this CP's own sessions.
+          return { ...st, clients, producers: [], active: own.filter((x) => x.flag !== 'DONE').length,
+            red: count('RED'), amber: count('AMBER'), clientLate: count('CLIENT LATE') };
+        })
+        .filter((st) => st.clients.length);
+      model.escalations = model.escalations.filter(mine);
+      model.clientLate = model.clientLate.filter(mine);
+      model.clientNames = [];
+      model.clientStudios = {};
     }
     res.json({
       ...model,
-      team: team.map((t) => ({ name: t.name, role: t.role, studio: t.studio })),
+      team: me.ownOnly ? [] : team.map((t) => ({ name: t.name, role: t.role })),
       me,
       user: req.session.user,
       mock: mockMode,
@@ -208,7 +195,7 @@ app.post('/api/action', requireUser, async (req, res) => {
     const raw = await sheet.readAll();
     const model = buildModel(raw);
     const me = identify(req, model);
-    if (!me || !me.canWrite) return res.status(403).json({ error: 'You have view-only access.' });
+    if (!me.canWrite) return res.status(403).json({ error: 'You have view-only access.' });
     const s = model.index[row];
     if (!s || s.client !== client || s.session !== session) {
       return res.status(409).json({ error: 'This session changed in the sheet. Refresh and try again.' });
@@ -249,7 +236,7 @@ app.post('/api/sessions', requireUser, async (req, res) => {
     const raw = await sheet.readAll();
     const model = buildModel(raw);
     const me = identify(req, model);
-    if (!me || !me.canWrite) return res.status(403).json({ error: 'You have view-only access.' });
+    if (!me.canWrite) return res.status(403).json({ error: 'You have view-only access.' });
     const studios = model.clientStudios[client];
     if (!studios) {
       return res.status(400).json({ error: 'That client is not on the Clients tab yet.' });
@@ -281,7 +268,7 @@ app.post('/api/clients', requireUser, async (req, res) => {
     const raw = await sheet.readAll();
     const model = buildModel(raw);
     const me = identify(req, model);
-    if (!me || !me.canManageClients) return res.status(403).json({ error: 'Only Ops and the CP Trainer can add clients.' });
+    if (!me.canManageClients) return res.status(403).json({ error: 'Only Ops and the CP Trainer can add clients.' });
     if (!name) return res.status(400).json({ error: 'Enter the client name.' });
     if (!model.studioNames.includes(studio)) return res.status(400).json({ error: 'Pick a studio.' });
     const bad = emails.filter((e) => !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e));
@@ -303,11 +290,11 @@ app.post('/api/clients', requireUser, async (req, res) => {
 
 app.get('/api/analytics', requireUser, async (req, res) => {
   try {
-    const model = buildModel(await sheet.readAll());
+    const raw = await sheet.readAll();
+    const model = buildModel(raw);
     const me = identify(req, model);
-    if (!me || !me.canSeeAnalytics) return res.status(403).json({ error: 'Analytics are for Ops, the CP Trainer and viewers.' });
-    const days = [30, 90].includes(Number(req.query.days)) ? Number(req.query.days) : null;
-    res.json(buildAnalytics(model, days));
+    if (!me.canSeeAnalytics) return res.status(403).json({ error: 'Analytics are for Ops, the CP Trainer and viewers.' });
+    res.json(buildAnalytics(model, raw.holidays || [], sheet.todayISO()));
   } catch (err) {
     console.error('Analytics failed:', err.message);
     res.status(502).json({ error: 'Could not read the tracker sheet.' });

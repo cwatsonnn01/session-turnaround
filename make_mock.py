@@ -1,6 +1,6 @@
-"""Builds mock.json: about two months of made-up sessions for local preview.
+"""Builds mock.json: about a year of made-up sessions for local preview.
 
-The formula columns (Stage, day counts, Flag) are computed here the same way the
+Formula columns (Stage, day counts, Flag, Stuck) are computed the same way the
 sheet's formulas compute them, so the preview behaves like the real thing.
 Run: python3 make_mock.py
 """
@@ -9,154 +9,149 @@ import json
 import random
 from pathlib import Path
 
-random.seed(7)
-TODAY = dt.date(2026, 10, 30)
-PROMISE, RED, AMBER, CLIENT_TARGET = 5, 5, 4, 2
+random.seed(11)
+TODAY = dt.date(2026, 11, 2)
+PROMISE, RED, AMBER, CLIENT_TARGET, STUCK = 5, 5, 4, 2, 3
+HOLIDAYS = {dt.date(2026, 1, 1), dt.date(2026, 2, 16), dt.date(2026, 4, 3), dt.date(2026, 5, 18), dt.date(2026, 7, 1),
+            dt.date(2026, 8, 3), dt.date(2026, 9, 7), dt.date(2026, 10, 12), dt.date(2025, 12, 25), dt.date(2025, 12, 26)}
 
-STUDIOS = ["Studio 1", "Studio 3", "Studio 4", "Studio 5", "Studio 7"]
-# Made-up home studios and speeds for the preview only.
-TEAM = [
-    ("Emily Sorlie", "Producer", "Studio 1", 3.0),
-    ("Ryan Mohamed", "Producer", "Studio 3", 4.2),
-    ("Rachel Colic", "Producer", "Studio 4", 3.4),
-    ("Dave Johnson", "Producer", "Studio 5", 5.1),
-    ("Folasade Apanisile", "Producer", "Studio 7", 3.8),
-    ("Tamika", "CP Trainer", "", 0),
-]
-CLIENTS = [
-    ("Alta Technologies", "Studio 1"), ("OTR Solutions", "Studio 1"), ("PB&J", "Studio 1"), ("Verifast", "Studio 1"),
-    ("Prometheus", "Studio 1"), ("Prometheus", "Studio 3"), ("Viadex", "Studio 3"), ("Guesty", "Studio 3"),
-    ("Kairos Blueprint", "Studio 3"), ("Jones Law Firm", "Studio 3"), ("Growthbook", "Studio 4"), ("Databook", "Studio 4"),
-    ("Elevate Ops", "Studio 4"), ("HelloHire", "Studio 4"), ("Zuar", "Studio 5"), ("MySherpa", "Studio 5"),
-    ("Kairos Blueprint", "Studio 5"), ("Signal Advisors", "Studio 5"), ("Recap", "Studio 7"), ("Bluegator", "Studio 7"),
-    ("Modern IT", "Studio 7"), ("Cleanlist", "Studio 7"),
-]
-HEADERS = ["Client", "Studio", "Producer", "Session", "Brainstorm complete", "Recorded", "Sent to client",
-           "Client responded", "Client decision", "Rework returned", "Approved", "Scheduled in Planable", "Stage",
-           "Internal days (recorded to sent)", "Client wait days", "Rework overdue", "Days recorded to approval",
-           "Past 5-day promise (recorded to sent)", "Flag", "Notes", "Nudge requested", "Last updated by"]
+STUDIOS = [f"Studio {i}" for i in range(1, 8)]
+# Made-up speeds per CP for the preview only (mean business days to content ready).
+TEAM = [("Emily Sorlie", "emily@demandii.com", "Producer", 3.2), ("Ryan Mohamed", "ryanmohamed@demandii.com", "Producer", 4.1),
+        ("Rachel Colic", "rachel@demandii.com", "Producer", 3.6), ("Dave Johnson", "dave@demandii.com", "Producer", 5.0),
+        ("Folasade Apanisile", "folasade@demandii.com", "Producer", 3.9), ("Tamika", "tamika@demandii.com", "CP Trainer", 0),
+        ("Tina Moffatt", "christina@demandii.com", "Ops", 0)]
+CLIENTS = [("Alta Technologies", "Studio 1"), ("OTR Solutions", "Studio 1"), ("PB&J", "Studio 1"), ("Verifast", "Studio 1"),
+           ("Prometheus", "Studio 1"), ("Prometheus", "Studio 3"), ("Viadex", "Studio 3"), ("Guesty", "Studio 3"),
+           ("Kairos Blueprint", "Studio 3"), ("Jones Law Firm", "Studio 3"), ("Growthbook", "Studio 4"), ("Databook", "Studio 4"),
+           ("Elevate Ops", "Studio 4"), ("HelloHire", "Studio 4"), ("Zuar", "Studio 5"), ("MySherpa", "Studio 5"),
+           ("Kairos Blueprint", "Studio 5"), ("Signal Advisors", "Studio 5"), ("Recap", "Studio 7"), ("Bluegator", "Studio 7"),
+           ("Modern IT", "Studio 7"), ("Cleanlist", "Studio 7")]
+CP_FOR_STUDIO = {"Studio 1": "Emily Sorlie", "Studio 3": "Ryan Mohamed", "Studio 4": "Rachel Colic", "Studio 5": "Dave Johnson",
+                 "Studio 7": "Folasade Apanisile"}
+HEADERS = ["Client", "Studio", "Producer", "Session", "Brainstorm complete", "Recorded", "Sent to client", "Client responded",
+           "Client decision", "Rework returned", "Approved", "Scheduled in Planable", "Stage", "Internal days (recorded to sent)",
+           "Client wait days", "Rework overdue", "Days recorded to approval", "Past 5-day promise (recorded to sent)", "Flag", "Notes",
+           "Nudge requested", "Last updated by", "Chaser ID", "Chaser status", "Status updated", "Changes requested (latest)",
+           "Rework rounds", "Business days since update", "Stuck", "Alerts sent"]
 
 
-def is_bd(d):
-    return d.weekday() < 5
+def workday(d):
+    return d.weekday() < 5 and d not in HOLIDAYS
 
 
 def add_bd(d, n):
     while n > 0:
         d += dt.timedelta(days=1)
-        if is_bd(d):
-            n -= 1
+        n -= workday(d)
     return d
 
 
-def networkdays(a, b):
+def nwd(a, b):  # NETWORKDAYS(a, b) - 1
     n, d = 0, a
     while d <= b:
-        n += is_bd(d)
+        n += workday(d)
         d += dt.timedelta(days=1)
-    return n
+    return n - 1
 
 
 def fmt(d):
-    return f"{d:%a} {d:%b} {d.day}" if d else ""
+    return f"{d:%a} {d:%b} {d.day}, {d.year}" if d else ""
 
 
-rows = []
-counter = {}
-start = TODAY - dt.timedelta(days=62)
-for i in range(70):
-    client, studio = random.choice(CLIENTS)
-    home = [t for t in TEAM if t[2] == studio]
-    prod = home[0] if home and random.random() < 0.85 else random.choice(TEAM[:5])
-    rec = start + dt.timedelta(days=random.randint(0, 62))
-    while not is_bd(rec):
-        rec += dt.timedelta(days=1)
-    if rec > TODAY:
-        continue
+def cap(d):
+    return d if d and d <= TODAY else None
+
+
+rows, counter = [], {}
+
+
+def add_row(client, studio, cp, rec, sent, resp, decision, changes, returned, approved, sched, rounds, status_day, status):
     counter[client] = counter.get(client, 0) + 1
-    brain = add_bd(rec, 0) - dt.timedelta(days=random.choice([2, 3, 4]))
-    speed = max(1, round(random.gauss(prod[3], 1.2)))
-    sent = add_bd(rec, speed)
-    sent = sent if sent <= TODAY else None
-    resp = add_bd(sent, max(0, round(random.gauss(1.8, 1.4)))) if sent else None
-    resp = resp if resp and resp <= TODAY else None
-    decision = ("Rework" if random.random() < 0.25 else "Approved") if resp else ""
-    rework_back = None
-    if decision == "Rework":
-        rework_back = add_bd(resp, 0 if random.random() < 0.8 else 1)
-        rework_back = rework_back if rework_back <= TODAY else None
-    approved = None
-    if decision == "Approved":
-        approved = resp
-    elif rework_back:
-        approved = add_bd(rework_back, 1)
-        approved = approved if approved <= TODAY else None
-    sched = add_bd(approved, 1) if approved else None
-    sched = sched if sched and sched <= TODAY else None
-
-    N = networkdays(rec, sent or TODAY) - 1
-    O = networkdays(sent, resp or TODAY) - 1 if sent else ""
-    P = "Yes" if decision == "Rework" and not rework_back and TODAY > resp else "No"
-    Q = networkdays(rec, approved or TODAY) - 1
+    N = nwd(rec, sent or TODAY)
+    O = nwd(sent, resp or TODAY) if sent else ""
+    rework_open = decision == "Rework" and not returned
+    P = "Yes" if rework_open and TODAY > add_bd(changes, 0) else "No"
     R = "Yes" if N > PROMISE else "No"
     if sched:
         S, stage = "DONE", "Done"
-    elif (not sent and N >= RED) or P == "Yes":
-        S = "RED"
-    elif not sent and N >= AMBER:
-        S = "AMBER"
-    elif sent and not resp and O > CLIENT_TARGET:
-        S = "CLIENT LATE"
     else:
-        S = "GREEN"
-    if not sched:
-        stage = ("4. Distribution" if approved else "3. Approval / rework" if resp else
-                 "3. Awaiting client" if sent else "2. Production")
-    rows.append([client, studio, prod[0], f"Session {counter[client]}", fmt(brain), fmt(rec), fmt(sent), fmt(resp),
-                 decision, fmt(rework_back), fmt(approved), fmt(sched), stage, str(N), str(O), P, str(Q), R, S, "", "",
-                 ""])
+        stage = ("4. Distribution" if approved else "3. Approval / rework" if resp else "3. Awaiting client" if sent else "2. Production")
+        if (not sent and N >= RED) or P == "Yes":
+            S = "RED"
+        elif not sent and N >= AMBER:
+            S = "AMBER"
+        elif sent and not resp and O > CLIENT_TARGET:
+            S = "CLIENT LATE"
+        else:
+            S = "GREEN"
+    since = "" if S == "DONE" else nwd(status_day, TODAY)
+    waiting = (sent and not resp) or (returned and not approved)
+    stuck = "" if since == "" else ("Yes" if since >= STUCK and not waiting else "No")
+    rows.append([client, studio, cp, f"Session {counter[client]}", "", fmt(rec), fmt(sent), fmt(resp), decision, fmt(returned),
+                 fmt(approved), fmt(sched), stage, str(N), str(O), P, str(nwd(rec, approved or TODAY)), R, S, "", "",
+                 f"Chaser ({cp}), {status_day.isoformat()}", f"CH-{len(rows) + 1000}", status, fmt(status_day), fmt(changes),
+                 str(rounds) if rounds else "", str(since), stuck, ""])
 
-# A few open problems so every flag shows up in the preview.
+
+speed = {t[0]: t[3] for t in TEAM}
+start = TODAY - dt.timedelta(days=330)
+for _ in range(240):
+    client, studio = random.choice(CLIENTS)
+    cp = CP_FOR_STUDIO[studio] if random.random() < 0.85 else random.choice(list(CP_FOR_STUDIO.values()))
+    rec = start + dt.timedelta(days=random.randint(0, 330))
+    while not workday(rec):
+        rec += dt.timedelta(days=1)
+    if rec > TODAY:
+        continue
+    # Everyone gets a little faster over the year, so the trend has something to show.
+    drift = 0.9 * (1 - (rec - start).days / 330)
+    sent = cap(add_bd(rec, max(1, round(random.gauss(speed[cp] + drift, 1.1)))))
+    resp = cap(add_bd(sent, max(0, round(random.gauss(1.7, 1.3))))) if sent else None
+    decision = ("Rework" if random.random() < 0.27 else "Approved") if resp else ""
+    rounds, changes, returned = 0, None, None
+    if decision == "Rework":
+        rounds = 2 if random.random() < 0.2 else 1
+        changes = resp if rounds == 1 else cap(add_bd(resp, 2))
+        returned = cap(add_bd(changes, 0 if random.random() < 0.8 else 1)) if changes else None
+        if changes is None:
+            rounds, changes, returned = 1, resp, cap(add_bd(resp, 0))
+    approved = resp if decision == "Approved" else (cap(add_bd(returned, 1)) if returned else None)
+    sched = cap(add_bd(approved, random.choice([0, 1, 1, 2, 3]))) if approved else None
+    status_day, status = rec, "Session wrapped"
+    for d, s in [(sent, "Content ready"), (changes, "requested changes"), (returned, "changes sent back"), (approved, "client approved"), (sched, "scheduled")]:
+        if d:
+            status_day, status = d, s
+    add_row(client, studio, cp, rec, sent, resp, decision, changes, returned, approved, sched, rounds, status_day, status)
+
+
 def bd_ago(n):
     d = TODAY
     while n > 0:
         d -= dt.timedelta(days=1)
-        n -= is_bd(d)
+        n -= workday(d)
     return d
 
 
-for client, studio, prod, rec_ago, sent_ago, resp_ago, decision, flag, note in [
-    ("Zuar", "Studio 5", "Dave Johnson", 7, None, None, "", "RED", "Editor out sick"),
-    ("Signal Advisors", "Studio 5", "Dave Johnson", 6, None, None, "", "RED", ""),
-    ("Viadex", "Studio 3", "Ryan Mohamed", 6, 2, 1, "Rework", "RED", "Client wants new hooks"),
-    ("Growthbook", "Studio 4", "Rachel Colic", 6, 4, None, "", "CLIENT LATE", ""),
-    ("Kairos Blueprint", "Studio 3", "Ryan Mohamed", 8, 5, None, "", "CLIENT LATE", "Chased by email"),
-]:
-    counter[client] = counter.get(client, 0) + 1
-    rec, sent, resp = bd_ago(rec_ago), sent_ago is not None and bd_ago(sent_ago), resp_ago is not None and bd_ago(resp_ago)
-    N = networkdays(rec, sent or TODAY) - 1
-    O = networkdays(sent, resp or TODAY) - 1 if sent else ""
-    stage = "3. Approval / rework" if resp else "3. Awaiting client" if sent else "2. Production"
-    rows.append([client, studio, prod, f"Session {counter[client]}", fmt(rec - dt.timedelta(days=3)), fmt(rec),
-                 fmt(sent or None), fmt(resp or None), decision, "", "", "", stage, str(N), str(O),
-                 "Yes" if decision == "Rework" else "No", str(networkdays(rec, TODAY) - 1),
-                 "Yes" if N > PROMISE else "No", flag, note, "", ""])
-
-# Two sessions not yet recorded.
-for client, studio in [("Zuar", "Studio 5"), ("Recap", "Studio 7")]:
-    counter[client] = counter.get(client, 0) + 1
-    rows.append([client, studio, [t for t in TEAM if t[2] == studio][0][0], f"Session {counter[client]}",
-                 fmt(TODAY - dt.timedelta(days=1)), "", "", "", "", "", "", "", "2. Awaiting recording", "", "", "No",
-                 "", "", "NOT RECORDED", "", "", ""])
+# Open problems so every state shows in the preview.
+add_row("Zuar", "Studio 5", "Dave Johnson", bd_ago(6), None, None, "", None, None, None, None, 0, bd_ago(6), "Session wrapped")
+add_row("Signal Advisors", "Studio 5", "Dave Johnson", bd_ago(4), None, None, "", None, None, None, None, 0, bd_ago(4), "Session wrapped")
+add_row("Viadex", "Studio 3", "Ryan Mohamed", bd_ago(7), bd_ago(3), bd_ago(1), "Rework", bd_ago(1), None, None, None, 2, bd_ago(1), "requested changes")
+add_row("Growthbook", "Studio 4", "Rachel Colic", bd_ago(7), bd_ago(4), None, "", None, None, None, None, 0, bd_ago(4), "Content ready")
+add_row("Bluegator", "Studio 7", "Folasade Apanisile", bd_ago(9), bd_ago(6), bd_ago(5), "Approved", None, None, bd_ago(5), None, 0, bd_ago(5), "client approved")
+add_row("Alta Technologies", "Studio 1", "Emily Sorlie", bd_ago(1), None, None, "", None, None, None, None, 0, bd_ago(1), "Session wrapped")
+add_row("Recap", "Studio 7", "Folasade Apanisile", bd_ago(2), bd_ago(0), None, "", None, None, None, None, 0, bd_ago(0), "Content ready")
 
 data = {
     "headers": HEADERS,
     "rows": rows,
     "clients": [[c, s, "Sample Contact", "contact@example.com"] for c, s in CLIENTS],
-    "settings": [["Promise", str(PROMISE)], ["RED", str(RED)], ["AMBER", str(AMBER)], ["Client target", str(CLIENT_TARGET)], ["Rework", "0"]],
+    "settings": [["Promise", str(PROMISE)], ["RED", str(RED)], ["AMBER", str(AMBER)], ["Client target", str(CLIENT_TARGET)],
+                 ["Rework", "0"], ["Stuck", str(STUCK)], ["Summary hour", "9"], ["Alerts", "No"], ["Nudge", "No"]],
     "studios": [[s] for s in STUDIOS],
-    "team": [[n, "", r, s] for n, r, s, _ in TEAM],
-    "asOf": "Fri, Oct 30 (sample data)",
+    "team": [[n, e, r] for n, e, r, _ in TEAM],
+    "holidays": [fmt(h) for h in sorted(HOLIDAYS)],
+    "asOf": "Mon, Nov 2 (sample data)",
 }
 out = Path(__file__).resolve().parent / "mock.json"
 out.write_text(json.dumps(data, indent=1))

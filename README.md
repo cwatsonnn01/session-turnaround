@@ -85,3 +85,23 @@ The server enforces this: view-only users get no buttons, and any write they att
 ## File layout
 
 Everything is in one folder on purpose: GitHub's website flattens folders on upload in some browsers, so a flat layout always uploads correctly. Only `index.html`, `login.html`, `app.js` and `styles.css` are served to browsers; the server code and `mock.json` are never reachable from the web.
+
+
+## Chaser automation (Nov 2026)
+
+Producers (CPs) don't log anything in the dashboard. Moving a client's checklist in **Chaser** fills the sheet:
+
+| Chaser status | Sheet column |
+|---|---|
+| Session wrapped | Recorded (starts the 5-day clock) + "countdown started" Slack DM to the CP |
+| Content ready | Sent to client (stops the clock) + GHL "content ready for review" email to the approvers |
+| requested changes | Client responded, Rework, Changes requested (latest), Rework rounds +1 |
+| changes sent back | Rework returned |
+| client approved | Approved |
+| scheduled | Scheduled in Planable |
+
+Flow: Chaser webhook → Zapier (Catch Hook) → POST to the sheet script (`sheet-script.gs`, pasted into the sheet's Extensions → Apps Script and deployed as a web app). The script also runs hourly: AMBER, RED and stuck alerts by Slack DM, a morning summary to the CP Trainer, and (when switched on in Settings) the GHL client nudge. Every update is logged on the Events tab.
+
+`node sheet-script.test.js` runs the script against a fake spreadsheet, Slack and GHL.
+
+Roles, by Google email on the Team tab: Producer (own sessions, read-only), CP Trainer and Ops (everything, analytics, corrections), anyone else at demandii.com (viewer: analytics and a read-only board). Preview locally with `npm run dev`, then switch role at `/dev/as?email=tamika@demandii.com`.

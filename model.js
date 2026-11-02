@@ -65,7 +65,11 @@ function describe(s, settings) {
     return { clock: `Client: ${plural(O, 'day')}`, note: `Sent ${v['Sent to client']}${nudge}` };
   }
   if (v['Client decision'] === 'Rework' && !v['Rework returned']) {
-    return { clock: s.reworkOverdue ? 'Rework overdue' : 'Rework due today', note: `Feedback ${v['Client responded']}` };
+    const round = num(v['Rework rounds']);
+    return {
+      clock: (s.reworkOverdue ? 'Rework overdue' : 'Rework due today') + (round > 1 ? ` (round ${round})` : ''),
+      note: `Changes requested ${v['Changes requested (latest)'] || v['Client responded']}`,
+    };
   }
   if (!v.Approved) {
     return { clock: 'Awaiting sign-off', note: `Rework back ${v['Rework returned']}` };
@@ -76,17 +80,19 @@ function describe(s, settings) {
   };
 }
 
-// Sheet dates arrive formatted as "Mon Oct 19" (no year). Take the most recent
-// such date that is not more than a month in the future.
+// Sheet dates arrive formatted, e.g. "Mon Oct 19, 2026" or "Mon Oct 19" (older
+// format, no year). Without a year, take the most recent such date that is not
+// more than a month in the future.
 const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
 function parseSheetDate(text, today = new Date()) {
   if (!text) return null;
   const iso = /^(\d{4})-(\d{2})-(\d{2})/.exec(text);
   if (iso) return Date.UTC(+iso[1], +iso[2] - 1, +iso[3]);
-  const m = /([A-Za-z]{3})[a-z]*\.?\s+(\d{1,2})/.exec(text.replace(/^\w{3},?\s+(?=[A-Za-z]{3})/, ''));
+  const m = /([A-Za-z]{3})[a-z]*\.?\s+(\d{1,2})(?:,?\s+(\d{4}))?/.exec(text.replace(/^\w{3},?\s+(?=[A-Za-z]{3})/, ''));
   if (!m) return null;
   const mon = MONTHS.indexOf(m[1].toLowerCase());
   if (mon < 0) return null;
+  if (m[3]) return Date.UTC(+m[3], mon, +m[2]);
   let y = today.getUTCFullYear();
   let t = Date.UTC(y, mon, +m[2]);
   if (t > today.getTime() + 31 * 864e5) t = Date.UTC(y - 1, mon, +m[2]);
@@ -106,6 +112,7 @@ function buildModel(raw) {
     amber: settingsRow(2, 4),
     clientTarget: settingsRow(3, 2),
     reworkDays: settingsRow(4, 0),
+    stuck: settingsRow(5, 3),
   };
 
   // Studios tab: Studio. Producers are not tied to a studio; each session names its own.
@@ -147,14 +154,20 @@ function buildModel(raw) {
       stage: v.Stage,
       flag: v.Flag || 'GREEN',
       reworkOverdue: v['Rework overdue'] === 'Yes',
+      stuck: v.Stuck === 'Yes',
+      sinceUpdate: num(v['Business days since update']),
+      chaserStatus: v['Chaser status'] || '',
+      reworkRounds: num(v['Rework rounds']) || (v['Client decision'] === 'Rework' ? 1 : 0),
       pastPromise: v['Past 5-day promise (recorded to sent)'] === 'Yes',
       internalDays: num(v['Internal days (recorded to sent)']),
       notes: v.Notes,
       recordedAt: parseSheetDate(v.Recorded),
       raw: v,
     };
+    // Steps done = up to the furthest step with a date. Brainstorm is optional
+    // (Chaser doesn't track it), so a gap before a later date still counts as done.
     let done = 0;
-    while (done < STEPS.length && v[STEPS[done][1]]) done++;
+    STEPS.forEach(([, col], i) => { if (v[col]) done = i + 1; });
     s.stepsDone = done;
     s.steps = STEPS.map(([label, col]) => ({ label, date: v[col] || '' }));
     Object.assign(s, describe(s, settings));
@@ -201,17 +214,28 @@ function buildModel(raw) {
     avgInternal: avg,
   };
 
-  const escalations = sessions.filter((s) => s.flag === 'RED').map((s) => ({
-    row: s.row,
-    title: `${s.client} · ${s.session}`,
-    reason: s.reworkOverdue
-      ? `Rework requested ${s.raw['Client responded']}, not returned.`
-      : `Day ${s.internalDays} since recording, nothing sent to client.`,
-    meta: [s.studio, s.producer, s.notes].filter(Boolean).join(' · '),
-  }));
+  // RED first, then stuck (no Chaser update for too long).
+  const escalations = sessions
+    .filter((s) => s.flag === 'RED' || (s.stuck && s.flag !== 'DONE'))
+    .sort((a, b) => (b.flag === 'RED') - (a.flag === 'RED'))
+    .map((s) => ({
+      row: s.row,
+      producer: s.producer,
+      studio: s.studio,
+      kind: s.flag === 'RED' ? 'RED' : 'STUCK',
+      title: `${s.client} · ${s.session}`,
+      reason: s.flag !== 'RED'
+        ? `No Chaser update for ${plural(s.sinceUpdate, 'business day')} (${s.chaserStatus || 'no status'}).`
+        : s.reworkOverdue
+          ? `Changes requested ${s.raw['Changes requested (latest)'] || s.raw['Client responded']}, not sent back.`
+          : `Day ${s.internalDays} since recording, content ready email not sent.`,
+      meta: [s.studio, s.producer, s.notes].filter(Boolean).join(' · '),
+    }));
 
   const clientLate = sessions.filter((s) => s.flag === 'CLIENT LATE').map((s) => ({
     row: s.row,
+    producer: s.producer,
+    studio: s.studio,
     title: `${s.client} · ${s.session}`,
     reason: `Sent ${s.raw['Sent to client']}, no reply after ${plural(num(s.raw['Client wait days']), 'business day')}.`,
     meta: s.raw['Nudge requested'] ? `Nudged ${s.raw['Nudge requested']}` : 'Not nudged yet',

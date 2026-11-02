@@ -2,8 +2,8 @@
   'use strict';
 
   var state = {
-    data: null, view: 'board', studio: 'All studios', flagged: false, mine: false, showDone: false,
-    busy: false, defaulted: false, days: '30', analytics: null
+    data: null, view: 'board', studio: 'All studios', flagged: false, showDone: false,
+    busy: false, defaulted: false, period: '30', anStudio: 'all', anCp: 'all', analytics: null
   };
   var FLAGGED = { 'RED': 1, 'AMBER': 1, 'CLIENT LATE': 1 };
 
@@ -40,14 +40,11 @@
     return api('/api/data').then(function (d) {
       state.data = d;
       var me = d.me;
-      if (me && !state.defaulted) {
+      if (!state.defaulted) {
         state.defaulted = true;
-        if (me.role === 'Producer') { state.studio = me.studio || 'All studios'; state.view = 'board'; }
-        else if (me.role === 'Viewer') { state.view = 'analytics'; }
-        else { state.view = 'board'; }
+        state.view = me.role === 'Viewer' ? 'analytics' : 'board';
       }
       render();
-      if ((!me || me.needsStudio) && !$('who-dialog').open) openWho(me && me.needsStudio ? me : null);
       if (state.view === 'analytics') loadAnalytics();
     }).catch(function (e) {
       $('studios').innerHTML = '<div class="empty">' + esc(e.message) + '</div>';
@@ -55,8 +52,7 @@
   }
 
   function loadAnalytics() {
-    var q = state.days === 'all' ? '' : '?days=' + state.days;
-    return api('/api/analytics' + q).then(function (a) {
+    return api('/api/analytics').then(function (a) {
       state.analytics = a;
       renderAnalytics();
     }).catch(function (e) { toast(e.message, true); });
@@ -65,25 +61,25 @@
   // ---------- Rendering ----------
   function render() {
     var d = state.data, me = d.me;
-    var label = !me ? (d.user ? d.user.name : '') :
-      me.role === 'Viewer' ? 'Viewing as ' + d.user.name :
-      me.name + (me.studio ? ' · ' + me.studio : ' · ' + me.role);
-    $('user-name').textContent = label;
-    $('switch-user').hidden = !me || (me.auto && me.role !== 'Producer');
+    $('user-name').textContent = me.role === 'Viewer' ? 'Viewing as ' + d.user.name : me.name + ' · ' + (me.role === 'Producer' ? 'CP' : me.role);
     $('mock-banner').hidden = !d.mock;
-    $('readonly-banner').hidden = !me || me.canWrite || me.needsStudio;
-    $('views').hidden = !(me && me.canSeeAnalytics);
-    $('add-session').hidden = !(me && me.canWrite);
-    $('new-client').hidden = !(me && me.canManageClients);
-    if (!(me && me.canSeeAnalytics)) state.view = 'board';
+    $('readonly-banner').hidden = me.canWrite;
+    $('readonly-banner').textContent = me.ownOnly
+      ? 'Your sessions. They update when you move the checklist in Chaser, so there is nothing to log here.'
+      : 'View only. Sessions update from Chaser.';
+    $('views').hidden = !me.canSeeAnalytics;
+    $('add-session').hidden = !me.canWrite;
+    $('new-client').hidden = !me.canManageClients;
+    if (!me.canSeeAnalytics) state.view = 'board';
     Array.prototype.forEach.call(document.querySelectorAll('#views [data-view]'), function (b) {
       b.setAttribute('aria-pressed', String(b.dataset.view === state.view));
     });
     $('board-view').hidden = state.view !== 'board';
     $('analytics-view').hidden = state.view !== 'analytics';
 
-    $('board-title').textContent = me && me.role === 'Producer' && state.studio === me.studio
-      ? me.studio + ': is every session on the clock?' : 'Is every session on the clock?';
+    $('board-title').textContent = me.ownOnly ? 'Your sessions' : 'Is every session on the clock?';
+    $('esc-title').textContent = me.ownOnly ? 'Needs you now' : 'Needs Tamika';
+    $('esc-sub').textContent = me.ownOnly ? 'RED, or no Chaser update for too long. Tamika sees these too.' : 'RED, or no Chaser update for too long.';
     $('as-of').textContent = 'As of ' + d.asOf + ' · ' + d.settings.promise +
       '-business-day promise, end of recording to client inbox';
 
@@ -96,14 +92,10 @@
   function renderFilters(d) {
     var names = ['All studios'].concat(d.studios.map(function (s) { return s.name; }));
     $('studio-filters').innerHTML = names.map(function (n) {
-      var mine = d.me && d.me.studio === n ? ' (yours)' : '';
-      return '<button type="button" class="pill" data-studio="' + esc(n) + '" aria-pressed="' + (state.studio === n) + '">' + esc(n + mine) + '</button>';
+      return '<button type="button" class="pill" data-studio="' + esc(n) + '" aria-pressed="' + (state.studio === n) + '">' + esc(n) + '</button>';
     }).join('');
     $('flagged-toggle').setAttribute('aria-pressed', String(state.flagged));
     $('done-toggle').setAttribute('aria-pressed', String(state.showDone));
-    var isProducer = d.me && d.me.role === 'Producer';
-    $('mine-toggle').hidden = !isProducer;
-    $('mine-toggle').setAttribute('aria-pressed', String(!!isProducer && state.mine));
   }
 
   function visibleStudios(d) {
@@ -116,9 +108,9 @@
     visibleStudios(d).forEach(function (st) { st.clients.forEach(function (c) { all = all.concat(c.sessions); }); });
     var count = function (f) { return all.filter(function (s) { return s.flag === f; }).length; };
     var active = all.filter(function (s) { return s.flag !== 'DONE'; });
-    var sent = all.filter(function (s) { return s.stepsDone >= 3 && s.internalDays != null; });
+    var sent = all.filter(function (s) { return s.steps[2].date && s.internalDays != null; });
     var avgDays = sent.length ? (sent.reduce(function (t, s) { return t + s.internalDays; }, 0) / sent.length).toFixed(1) : '–';
-    var scope = state.studio === 'All studios' ? 'Across ' + d.studios.length + ' studios' : state.studio;
+    var scope = d.me.ownOnly ? 'Yours' : state.studio === 'All studios' ? 'Across ' + d.studios.length + ' studios' : state.studio;
     var items = [
       ['', 'Active sessions', active.length, scope],
       ['is-red', 'RED', count('RED'), 'Needs Tamika'],
@@ -136,17 +128,15 @@
   }
 
   function renderStudios(d) {
-    var meName = d.me && d.me.name;
     var html = visibleStudios(d).map(function (st) {
       var clients = st.clients.map(function (c) {
         var sessions = c.sessions.filter(function (s) {
-          return (!state.flagged || FLAGGED[s.flag]) && (!state.mine || !meName || s.producer === meName) &&
-            (state.showDone || s.flag !== 'DONE');
+          return (!state.flagged || FLAGGED[s.flag] || s.stuck) && (state.showDone || s.flag !== 'DONE');
         });
         if (!sessions.length) return '';
         return '<div class="client"><h3>' + esc(c.name) + '</h3>' + sessions.map(sessionRow).join('') + '</div>';
       }).join('');
-      if ((state.flagged || state.mine) && !clients) return '';
+      if (state.flagged && !clients) return '';
       var doneCount = st.clients.reduce(function (t, c) { return t + c.sessions.filter(function (s) { return s.flag === 'DONE'; }).length; }, 0);
       var counts = '<span class="chip chip-count">' + st.active + ' active</span>' +
         (st.red ? '<span class="' + chipClass('RED') + '">' + st.red + ' RED</span>' : '') +
@@ -176,22 +166,25 @@
       '<div class="s-name"><strong>' + esc(s.session) + '</strong><span>' + esc(stageLabel(s.stage)) + '</span>' +
       '<span class="who-line">' + esc(s.producer || 'No producer set') + '</span></div>' +
       '<ol class="tracker" aria-label="' + esc(s.session + ': ' + s.stepsDone + ' of 6 steps done') + '">' + steps + '</ol>' +
-      '<div class="s-clock"><strong>' + esc(s.clock) + '</strong><span>' + esc(s.note) + '</span></div>' +
-      '<span class="' + chipClass(s.flag) + '">' + esc(s.flag) + '</span>' +
+      '<div class="s-clock"><strong>' + esc(s.clock) + '</strong><span>' + esc(s.note) + '</span>' +
+      (s.chaserStatus ? '<span class="chaser">Chaser: ' + esc(s.chaserStatus) + (s.sinceUpdate != null && s.flag !== 'DONE' ? ' · ' + s.sinceUpdate + ' d ago' : '') + '</span>' : '') + '</div>' +
+      '<span class="chips"><span class="' + chipClass(s.flag) + '">' + esc(s.flag) + '</span>' +
+      (s.stuck && s.flag !== 'DONE' ? '<span class="chip chip-STUCK">STUCK</span>' : '') + '</span>' +
       (actions ? '<div class="s-actions">' + actions + '</div>' : '') +
       '</div>';
   }
 
-  function shortDate(v) { return v ? String(v).replace(/^\w{3}\s+/, '') : ''; }
+  function shortDate(v) { return v ? String(v).replace(/^\w{3}\s+/, '').replace(/,?\s+\d{4}$/, '') : ''; }
   function stageLabel(v) { return String(v || '').replace(/^\d\.\s*/, ''); }
 
   function renderSide(d) {
-    var inScope = function (e) { return state.studio === 'All studios' || e.meta.indexOf(state.studio) === 0; };
+    var inScope = function (e) { return state.studio === 'All studios' || e.studio === state.studio; };
     var esc1 = d.escalations.filter(inScope);
     $('escalations').innerHTML = esc1.length ? esc1.map(function (e) {
-      return '<div class="alert alert-red"><strong>' + esc(e.title) + '</strong><span>' + esc(e.reason) + '</span><small>' + esc(e.meta) + '</small></div>';
-    }).join('') : '<p class="none">Nothing RED right now.</p>';
-    var late = d.clientLate;
+      return '<div class="alert ' + (e.kind === 'RED' ? 'alert-red' : 'alert-stuck') + '"><strong>' + (e.kind === 'RED' ? '' : 'Stuck: ') + esc(e.title) +
+        '</strong><span>' + esc(e.reason) + '</span><small>' + esc(e.meta) + '</small></div>';
+    }).join('') : '<p class="none">Nothing RED or stuck right now.</p>';
+    var late = d.clientLate.filter(inScope);
     $('client-late').innerHTML = late.length ? late.map(function (e) {
       return '<div class="alert alert-late"><strong>' + esc(e.title) + '</strong><span>' + esc(e.reason) + '</span><small>' + esc(e.meta) + '</small></div>';
     }).join('') : '<p class="none">No clients past 48 hours.</p>';
@@ -200,72 +193,318 @@
       '<li><span class="' + chipClass('RED') + '">RED</span> Day ' + s.red + ' since recording and not sent, or rework not returned the same day.</li>' +
       '<li><span class="' + chipClass('AMBER') + '">AMBER</span> Day ' + s.amber + ' since recording and not sent.</li>' +
       '<li><span class="' + chipClass('CLIENT LATE') + '">CLIENT LATE</span> Sent, no reply after ' + s.clientTarget + ' business days.</li>' +
+      '<li><span class="chip chip-STUCK">STUCK</span> No Chaser update for ' + (s.stuck || 3) + ' business days (not counted while waiting on the client).</li>' +
       '<li class="muted">Thresholds come from the Settings tab of the tracker sheet.</li>';
   }
 
   // ---------- Analytics ----------
+  // Records come from the server once; every filter below is computed here.
+  var CHART = {
+    ink: '#0A0A0A', grid: '#E6E6E1', muted: '#5E5E5E', surface: '#FFFFFF',
+    good: '#0ca30c', critical: '#d03b3b', warning: '#fab219', late: '#6250d6',
+    stages: ['#2a78d6', '#eb6834', '#1baf7a', '#eda100'] // validated categorical slots 1-4
+  };
+  var STAGES = [
+    ['production', 'Production', 'Recording to content ready'],
+    ['review', 'Client review', 'Content ready to first client reply'],
+    ['rework', 'Rework', 'Changes requested to sent back'],
+    ['scheduling', 'Scheduling', 'Approved to scheduled']
+  ];
+  var charts = {};
+
+  function dayMs(iso) { return Date.parse(iso + 'T00:00:00Z'); }
+  function periodRange(a) {
+    var today = dayMs(a.today), D = 864e5;
+    if (state.period === '30') return { start: today - 29 * D, end: today, prev: [today - 59 * D, today - 30 * D], label: 'Last 30 days' };
+    if (state.period === '90') return { start: today - 89 * D, end: today, prev: [today - 179 * D, today - 90 * D], label: 'Last 90 days' };
+    if (state.period === 'ytd') {
+      var y = new Date(today).getUTCFullYear();
+      var start = Date.UTC(y, 0, 1);
+      return { start: start, end: today, prev: [Date.UTC(y - 1, 0, 1), today - (start - Date.UTC(y - 1, 0, 1))], label: 'This year' };
+    }
+    return { start: -Infinity, end: today, prev: null, label: 'All time' };
+  }
+  function matchesFilters(r) {
+    return (state.anStudio === 'all' || r.studio === state.anStudio) && (state.anCp === 'all' || r.producer === state.anCp);
+  }
+  function inWindow(r, from, to) { var t = dayMs(r.recorded); return t >= from && t <= to; }
+  function mean(xs) { return xs.length ? xs.reduce(function (a, b) { return a + b; }, 0) / xs.length : null; }
+  function r1(x) { return x == null ? null : Math.round(x * 10) / 10; }
+
+  function summarize(list) {
+    var sent = list.filter(function (r) { return r.productionDone; });
+    var replied = list.filter(function (r) { return r.reviewDone; });
+    var reworked = list.filter(function (r) { return r.reworkRounds > 0; });
+    var stage = {};
+    STAGES.forEach(function (s) {
+      var key = s[0];
+      stage[key] = r1(mean(list.filter(function (r) { return r[key] != null; }).map(function (r) { return r[key]; })));
+    });
+    return {
+      count: list.length,
+      sent: sent.length,
+      onTimePct: sent.length ? Math.round(sent.filter(function (r) { return r.onTime; }).length / sent.length * 100) : null,
+      lateCount: list.filter(function (r) { return r.late; }).length,
+      avgDays: r1(mean(sent.map(function (r) { return r.production; }))),
+      avgReply: r1(mean(replied.map(function (r) { return r.review; }))),
+      reworkPct: replied.length ? Math.round(reworked.length / replied.length * 100) : null,
+      stage: stage
+    };
+  }
+
+  // Arrow + change vs the previous period. betterWhenUp decides the colour.
+  function delta(now, before, betterWhenUp, unit) {
+    if (now == null || before == null) return '';
+    var d = r1(now - before);
+    if (!d) return '<span class="delta flat">no change</span>';
+    var good = betterWhenUp ? d > 0 : d < 0;
+    return '<span class="delta ' + (good ? 'up' : 'down') + '">' + (d > 0 ? '▲ ' : '▼ ') + Math.abs(d) + (unit || '') + '</span>';
+  }
+
   function renderAnalytics() {
     var a = state.analytics;
     if (!a) return;
-    Array.prototype.forEach.call(document.querySelectorAll('#analytics-view [data-days]'), function (b) {
-      b.setAttribute('aria-pressed', String(b.dataset.days === state.days));
+    Array.prototype.forEach.call(document.querySelectorAll('[data-period]'), function (b) {
+      b.setAttribute('aria-pressed', String(b.dataset.period === state.period));
     });
-    $('an-sub').textContent = a.window + ' by recording date. Open sessions always count. Promise: ' + a.promise + ' business days.';
-    var o = a.overall;
-    $('an-kpis').innerHTML = [
-      [o.onTimePct != null && o.onTimePct < 80 ? 'is-red' : '', 'On time', dash(o.onTimePct, '%'), o.late + ' of ' + o.sent + ' sent late'],
-      ['', 'Avg days to client', dash(o.avgDays), 'Median ' + dash(o.medianDays)],
-      ['', 'Sessions sent', o.sent, o.recorded + ' recorded'],
-      ['is-red', 'RED now', o.red, o.amber + ' AMBER'],
-      ['is-late', 'Avg client reply', dash(o.avgClientWait, ' d'), o.waitingOnClient + ' waiting now'],
-      ['', 'Rework rate', dash(o.reworkPct, '%'), o.clientsAffected + ' clients affected']
-    ].map(kpiCard).join('');
+    var opt = function (v, label, cur) { return '<option value="' + esc(v) + '"' + (v === cur ? ' selected' : '') + '>' + esc(label) + '</option>'; };
+    $('an-studio').innerHTML = opt('all', 'All studios', state.anStudio) + a.studios.map(function (s) { return opt(s, s, state.anStudio); }).join('');
+    var cps = a.producers.slice();
+    a.records.forEach(function (r) { if (cps.indexOf(r.producer) < 0) cps.push(r.producer); });
+    $('an-cp').innerHTML = opt('all', 'All CPs', state.anCp) + cps.map(function (c) { return opt(c, c, state.anCp); }).join('');
 
-    var maxDays = Math.max(a.promise * 2, Math.max.apply(null, a.byStudio.concat(a.byProducer).map(function (r) { return r.avgDays || 0; })));
-    var head = function (first, extra) {
-      return '<thead><tr><th scope="col">' + first + '</th>' + (extra || '') +
-        '<th scope="col" class="num">Sent</th><th scope="col" class="num">On time</th><th scope="col">Avg days to client</th>' +
-        '<th scope="col" class="num">Slowest</th><th scope="col" class="num">RED</th><th scope="col" class="num">AMBER</th>' +
-        '<th scope="col" class="num">Waiting on client</th><th scope="col" class="num">Avg client reply</th>' +
-        '<th scope="col" class="num">Rework</th><th scope="col" class="num">Clients affected</th></tr></thead>';
+    var p = periodRange(a);
+    var filtered = a.records.filter(matchesFilters);
+    var cur = filtered.filter(function (r) { return inWindow(r, p.start, p.end); });
+    var prev = p.prev ? filtered.filter(function (r) { return inWindow(r, p.prev[0], p.prev[1]); }) : [];
+    var S = summarize(cur), P = p.prev && prev.length ? summarize(prev) : null;
+    var scope = [state.anStudio === 'all' ? 'all studios' : state.anStudio, state.anCp === 'all' ? 'all CPs' : state.anCp].join(', ');
+    $('an-sub').textContent = p.label + ' · ' + scope + ' · by recording date · promise ' + a.promise + ' business days' +
+      (P ? ' · arrows compare with the ' + (state.period === 'ytd' ? 'same dates last year' : 'previous ' + state.period + ' days') : '');
+
+    var kpi = function (cls, label, value, sub, d) {
+      return '<div class="kpi ' + cls + '"><span class="label">' + esc(label) + '</span><span class="value">' + esc(value) + '</span>' +
+        '<span class="sub">' + (d || '') + ' ' + esc(sub) + '</span></div>';
     };
-    var cells = function (r) {
-      var onTimeCls = r.onTimePct == null ? '' : r.onTimePct >= 90 ? 'good' : r.onTimePct >= 75 ? 'warn' : 'bad';
-      return '<td class="num">' + r.sent + '</td>' +
-        '<td class="num"><span class="pctv ' + onTimeCls + '">' + dash(r.onTimePct, '%') + '</span></td>' +
-        '<td>' + bar(r.avgDays, a.promise, maxDays) + '</td>' +
-        '<td class="num' + (r.slowestDays > a.promise ? ' over' : '') + '">' + dash(r.slowestDays) + '</td>' +
-        '<td class="num' + (r.red ? ' over' : '') + '">' + r.red + '</td>' +
-        '<td class="num">' + r.amber + '</td>' +
-        '<td class="num">' + r.waitingOnClient + (r.clientLate ? ' <span class="late-note">(' + r.clientLate + ' late)</span>' : '') + '</td>' +
-        '<td class="num">' + dash(r.avgClientWait, ' d') + '</td>' +
-        '<td class="num">' + dash(r.reworkPct, '%') + '</td>' +
-        '<td class="num">' + r.clientsAffected + '</td>';
-    };
-    $('an-studios').innerHTML = head('Studio') + '<tbody>' + a.byStudio.map(function (r) {
-      return '<tr><th scope="row">' + esc(r.name) + '<small>' + esc(r.producers.join(', ') || 'No sessions') + '</small></th>' + cells(r) + '</tr>';
-    }).join('') + '</tbody>';
-    $('an-producers').innerHTML = head('Producer', '<th scope="col">Home studio</th>') + '<tbody>' + a.byProducer.map(function (r) {
-      return '<tr><th scope="row">' + esc(r.name) + '</th><td>' + esc(r.studio || '–') + '</td>' + cells(r) + '</tr>';
-    }).join('') + '</tbody>';
-    $('an-clients').innerHTML = '<thead><tr><th scope="col">Client</th><th scope="col">Studio</th><th scope="col">Producer</th>' +
-      '<th scope="col" class="num">Sessions past promise</th><th scope="col" class="num">Slowest</th><th scope="col">Open issues</th></tr></thead><tbody>' +
-      (a.clients.length ? a.clients.map(function (c) {
-        var open = c.open.map(function (x) {
-          return '<span class="' + chipClass(x.flag) + '">' + esc(x.flag) + '</span> ' + esc(x.session + ': ' + x.clock);
-        }).join('<br>');
-        return '<tr><th scope="row">' + esc(c.name) + '</th><td>' + esc(c.studios.join(', ')) + '</td><td>' + esc(c.producers.join(', ')) + '</td>' +
-          '<td class="num' + (c.late ? ' over' : '') + '">' + c.late + '</td><td class="num">' + dash(c.slowestDays || null) + '</td>' +
-          '<td class="issues">' + (open || '<span class="muted">None open</span>') + '</td></tr>';
-      }).join('') : '<tr><td colspan="6" class="muted">No clients affected in this window.</td></tr>') + '</tbody>';
+    $('an-kpis').innerHTML = [
+      kpi(S.onTimePct != null && S.onTimePct < 80 ? 'is-red' : '', 'On time', dash(S.onTimePct, '%'), S.sent + ' sent', P && delta(S.onTimePct, P.onTimePct, true, ' pts')),
+      kpi('', 'Avg days to content ready', dash(S.avgDays), 'business days', P && delta(S.avgDays, P.avgDays, false)),
+      kpi('', 'Sessions wrapped', S.count, 'recorded', P && delta(S.count, P.count, true)),
+      kpi(S.lateCount ? 'is-red' : '', 'Late', S.lateCount, 'past the promise', P && delta(S.lateCount, P.lateCount, false)),
+      kpi('is-late', 'Avg client reply', dash(S.avgReply, ' d'), 'business days', P && delta(S.avgReply, P.avgReply, false)),
+      kpi('', 'Rework rate', dash(S.reworkPct, '%'), 'of replies', P && delta(S.reworkPct, P.reworkPct, false, ' pts'))
+    ].join('');
+
+    renderHealth(filtered.filter(function (r) { return r.open; }));
+    renderTrends(cur, p, a);
+    renderCps(cur, prev, a, cps);
+    renderStages(cur, cps);
+    renderStudioTable(cur, prev, a);
+    renderClients(cur);
   }
 
-  function bar(v, promise, max) {
-    if (v == null) return '<span class="muted">–</span>';
-    var w = Math.min(100, (v / max) * 100), p = (promise / max) * 100;
-    return '<div class="bar" role="img" aria-label="' + v + ' days, promise ' + promise + '">' +
-      '<span class="bar-fill' + (v > promise ? ' over' : '') + '" style="width:' + w + '%"></span>' +
-      '<span class="bar-mark" style="left:' + p + '%"></span></div><span class="bar-val">' + v + '</span>';
+  function renderHealth(open) {
+    var parts = [
+      ['On track', open.filter(function (r) { return r.flag === 'GREEN'; }).length, CHART.good],
+      ['AMBER', open.filter(function (r) { return r.flag === 'AMBER'; }).length, CHART.warning],
+      ['RED', open.filter(function (r) { return r.flag === 'RED'; }).length, CHART.critical],
+      ['Client late', open.filter(function (r) { return r.flag === 'CLIENT LATE'; }).length, CHART.late]
+    ];
+    var total = open.length;
+    var stuck = open.filter(function (r) { return r.stuck; }).length;
+    var overdue = parts[2][1] + open.filter(function (r) { return r.late && r.flag !== 'RED'; }).length;
+    var bar = total ? '<div class="seg" role="img" aria-label="' + esc(parts.map(function (p) { return p[0] + ' ' + p[1]; }).join(', ')) + '">' +
+      parts.filter(function (p) { return p[1]; }).map(function (p) {
+        return '<span style="flex:' + p[1] + ';background:' + p[2] + '" title="' + esc(p[0] + ': ' + p[1]) + '"></span>';
+      }).join('') + '</div>' : '';
+    $('an-health').innerHTML = '<div class="health-row">' +
+      '<div class="health-big"><span class="value">' + total + '</span><span class="label">open sessions</span></div>' +
+      '<div class="health-big"><span class="value' + (overdue ? ' red' : '') + '">' + overdue + '</span><span class="label">overdue</span></div>' +
+      '<div class="health-big"><span class="value">' + (total - overdue) + '</span><span class="label">not overdue</span></div>' +
+      '<div class="health-big"><span class="value' + (stuck ? ' red' : '') + '">' + stuck + '</span><span class="label">stuck (no Chaser update)</span></div>' +
+      '</div>' + bar + '<ul class="seg-legend">' + parts.map(function (p) {
+        return '<li><span class="sw" style="background:' + p[2] + '"></span>' + esc(p[0]) + ' <strong>' + p[1] + '</strong></li>';
+      }).join('') + '</ul>' + (total ? '' : '<p class="none">No open sessions match these filters.</p>');
+  }
+
+  // Weekly buckets for 30/90 days, monthly for longer windows.
+  function buckets(p, recs, a) {
+    var monthly = state.period === 'ytd' || state.period === 'all';
+    var start = p.start;
+    if (start === -Infinity) {
+      start = recs.reduce(function (m, r) { return Math.min(m, dayMs(r.recorded)); }, dayMs(a.today));
+    }
+    var out = [], d = new Date(start);
+    if (monthly) {
+      d = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
+      while (d.getTime() <= p.end) {
+        var next = Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1);
+        out.push({ from: d.getTime(), to: next - 1, label: d.toLocaleDateString('en-US', { month: 'short', year: '2-digit', timeZone: 'UTC' }) });
+        d = new Date(next);
+      }
+    } else {
+      var dow = (d.getUTCDay() + 6) % 7; // Monday = 0
+      var t = d.getTime() - dow * 864e5;
+      while (t <= p.end) {
+        out.push({ from: t, to: t + 7 * 864e5 - 1, label: 'Wk of ' + new Date(t).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }) });
+        t += 7 * 864e5;
+      }
+    }
+    return out.map(function (b) {
+      var inB = recs.filter(function (r) { var x = dayMs(r.recorded); return x >= b.from && x <= b.to; });
+      var sent = inB.filter(function (r) { return r.productionDone; });
+      return {
+        label: b.label,
+        onTime: inB.filter(function (r) { return !r.late; }).length,
+        late: inB.filter(function (r) { return r.late; }).length,
+        avgDays: r1(mean(sent.map(function (r) { return r.production; })))
+      };
+    });
+  }
+
+  function chart(id, config) {
+    if (typeof Chart === 'undefined') return;
+    if (charts[id]) charts[id].destroy();
+    charts[id] = new Chart($(id), config);
+  }
+  function baseOptions(extra) {
+    var o = {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { position: 'top', align: 'start', labels: { boxWidth: 12, boxHeight: 12, color: CHART.muted, font: { family: 'Barlow', size: 13 } } },
+        tooltip: { backgroundColor: CHART.ink, titleFont: { family: 'Barlow', weight: '700' }, bodyFont: { family: 'Barlow' }, padding: 10 }
+      },
+      scales: {
+        x: { grid: { display: false }, ticks: { color: CHART.muted, font: { family: 'Barlow' } }, border: { color: CHART.grid } },
+        y: { beginAtZero: true, grid: { color: CHART.grid }, ticks: { color: CHART.muted, font: { family: 'Barlow' }, precision: 0 }, border: { display: false } }
+      }
+    };
+    return Object.assign(o, extra || {});
+  }
+
+  function renderTrends(cur, p, a) {
+    var b = buckets(p, cur, a);
+    var labels = b.map(function (x) { return x.label; });
+    chart('chart-ontime', {
+      type: 'bar',
+      data: { labels: labels, datasets: [
+        { label: 'On time', data: b.map(function (x) { return x.onTime; }), backgroundColor: CHART.good, borderRadius: 4, borderColor: CHART.surface, borderWidth: 2, borderSkipped: false, maxBarThickness: 36 },
+        { label: 'Late', data: b.map(function (x) { return x.late; }), backgroundColor: CHART.critical, borderRadius: 4, borderColor: CHART.surface, borderWidth: 2, borderSkipped: false, maxBarThickness: 36 }
+      ] },
+      options: baseOptions({ scales: Object.assign(baseOptions().scales, { x: Object.assign(baseOptions().scales.x, { stacked: true }), y: Object.assign(baseOptions().scales.y, { stacked: true, title: { display: true, text: 'Sessions', color: CHART.muted } }) }) })
+    });
+    chart('chart-days', {
+      type: 'line',
+      data: { labels: labels, datasets: [
+        { label: 'Avg days to content ready', data: b.map(function (x) { return x.avgDays; }), borderColor: CHART.ink, backgroundColor: CHART.ink, borderWidth: 2, pointRadius: 4, pointHoverRadius: 6, spanGaps: true, tension: 0 },
+        { label: a.promise + '-day promise', data: b.map(function () { return a.promise; }), borderColor: CHART.critical, borderDash: [6, 4], borderWidth: 2, pointRadius: 0, pointHoverRadius: 0 }
+      ] },
+      options: baseOptions({ scales: Object.assign(baseOptions().scales, { y: Object.assign(baseOptions().scales.y, { suggestedMax: a.promise + 2, title: { display: true, text: 'Business days', color: CHART.muted } }) }) })
+    });
+  }
+
+  function onTimeClass(v) { return v == null ? '' : v >= 90 ? 'good' : v >= 75 ? 'warn' : 'bad'; }
+  function slowestStage(st) {
+    var best = null;
+    STAGES.forEach(function (s) { if (st[s[0]] != null && (!best || st[s[0]] > st[best[0]])) best = s; });
+    return best ? best[1] + ' (' + st[best[0]] + ' d)' : '–';
+  }
+
+  function renderCps(cur, prev, a, cps) {
+    var open = a.records.filter(function (r) { return r.open && matchesFilters(r); });
+    var rows = cps.filter(function (c) { return state.anCp === 'all' || c === state.anCp; }).map(function (c) {
+      var mine = function (r) { return r.producer === c; };
+      var S = summarize(cur.filter(mine)), P = prev.length ? summarize(prev.filter(mine)) : null;
+      var o = open.filter(mine);
+      return { name: c, S: S, P: P && P.count ? P : null, red: o.filter(function (r) { return r.flag === 'RED'; }).length, stuck: o.filter(function (r) { return r.stuck; }).length, open: o.length };
+    }).filter(function (r) { return r.S.count || r.open; });
+    rows.sort(function (x, y) { return (x.S.onTimePct == null ? 101 : x.S.onTimePct) - (y.S.onTimePct == null ? 101 : y.S.onTimePct) || y.S.lateCount - x.S.lateCount; });
+    $('an-cps').innerHTML = '<thead><tr><th scope="col">CP</th><th scope="col" class="num">Sessions</th><th scope="col" class="num">On time</th>' +
+      '<th scope="col" class="num">Avg days to content ready</th><th scope="col" class="num">Late</th><th scope="col">Slowest stage</th>' +
+      '<th scope="col" class="num">Avg client reply</th><th scope="col" class="num">Rework rate</th><th scope="col" class="num">Open now</th>' +
+      '<th scope="col" class="num">RED now</th><th scope="col" class="num">Stuck now</th></tr></thead><tbody>' +
+      (rows.length ? rows.map(function (r) {
+        return '<tr><th scope="row">' + esc(r.name) + '</th><td class="num">' + r.S.count + '</td>' +
+          '<td class="num"><span class="pctv ' + onTimeClass(r.S.onTimePct) + '">' + dash(r.S.onTimePct, '%') + '</span> ' + (r.P ? delta(r.S.onTimePct, r.P.onTimePct, true, '') : '') + '</td>' +
+          '<td class="num' + (r.S.avgDays > a.promise ? ' over' : '') + '">' + dash(r.S.avgDays) + ' ' + (r.P ? delta(r.S.avgDays, r.P.avgDays, false) : '') + '</td>' +
+          '<td class="num' + (r.S.lateCount ? ' over' : '') + '">' + r.S.lateCount + '</td>' +
+          '<td>' + esc(slowestStage(r.S.stage)) + '</td>' +
+          '<td class="num">' + dash(r.S.avgReply, ' d') + '</td><td class="num">' + dash(r.S.reworkPct, '%') + '</td>' +
+          '<td class="num">' + r.open + '</td><td class="num' + (r.red ? ' over' : '') + '">' + r.red + '</td>' +
+          '<td class="num' + (r.stuck ? ' over' : '') + '">' + r.stuck + '</td></tr>';
+      }).join('') : '<tr><td colspan="11" class="muted">No sessions in this window.</td></tr>') + '</tbody>';
+  }
+
+  function renderStages(cur, cps) {
+    var groups = [['All CPs', cur]].concat(cps.filter(function (c) { return state.anCp === 'all' || c === state.anCp; })
+      .map(function (c) { return [c, cur.filter(function (r) { return r.producer === c; })]; })
+      .filter(function (g) { return g[1].length; }));
+    if (state.anCp !== 'all') groups = groups.slice(1);
+    var sums = groups.map(function (g) { return { name: g[0], st: summarize(g[1]).stage, n: g[1].length }; });
+    chart('chart-stages', {
+      type: 'bar',
+      data: { labels: sums.map(function (s) { return s.name; }), datasets: STAGES.map(function (s, i) {
+        return { label: s[1], data: sums.map(function (x) { return x.st[s[0]]; }), backgroundColor: CHART.stages[i], borderColor: CHART.surface, borderWidth: 2, borderSkipped: false, borderRadius: 4, maxBarThickness: 28 };
+      }) },
+      options: baseOptions({
+        indexAxis: 'y',
+        interaction: { mode: 'index', intersect: false, axis: 'y' },
+        scales: {
+          x: { stacked: true, beginAtZero: true, grid: { color: CHART.grid }, ticks: { color: CHART.muted, font: { family: 'Barlow' } }, border: { display: false }, title: { display: true, text: 'Business days', color: CHART.muted } },
+          y: { stacked: true, grid: { display: false }, ticks: { color: CHART.ink, font: { family: 'Barlow', weight: '600' } }, border: { color: CHART.grid } }
+        }
+      })
+    });
+    $('chart-stages').parentNode.style.height = Math.max(160, 70 + sums.length * 44) + 'px';
+    $('an-stages').innerHTML = '<thead><tr><th scope="col">Stage (business days)</th>' + sums.map(function (s) { return '<th scope="col" class="num">' + esc(s.name) + '</th>'; }).join('') +
+      '</tr></thead><tbody>' + STAGES.map(function (s) {
+        return '<tr><th scope="row">' + esc(s[1]) + '<small>' + esc(s[2]) + '</small></th>' + sums.map(function (x) {
+          return '<td class="num">' + dash(x.st[s[0]]) + '</td>';
+        }).join('') + '</tr>';
+      }).join('') + '</tbody>';
+  }
+
+  function renderStudioTable(cur, prev, a) {
+    var open = a.records.filter(function (r) { return r.open && matchesFilters(r); });
+    var names = a.studios.filter(function (s) { return state.anStudio === 'all' || s === state.anStudio; });
+    $('an-studios').innerHTML = '<thead><tr><th scope="col">Studio</th><th scope="col" class="num">Sessions</th><th scope="col" class="num">On time</th>' +
+      '<th scope="col" class="num">Avg days to content ready</th><th scope="col" class="num">Late</th><th scope="col">Slowest stage</th>' +
+      '<th scope="col" class="num">Open now</th><th scope="col" class="num">RED now</th><th scope="col" class="num">Stuck now</th></tr></thead><tbody>' +
+      names.map(function (n) {
+        var mine = function (r) { return r.studio === n; };
+        var S = summarize(cur.filter(mine)), P = prev.length ? summarize(prev.filter(mine)) : null;
+        var o = open.filter(mine);
+        var red = o.filter(function (r) { return r.flag === 'RED'; }).length, stuck = o.filter(function (r) { return r.stuck; }).length;
+        return '<tr><th scope="row">' + esc(n) + '</th><td class="num">' + S.count + '</td>' +
+          '<td class="num"><span class="pctv ' + onTimeClass(S.onTimePct) + '">' + dash(S.onTimePct, '%') + '</span> ' + (P && P.count ? delta(S.onTimePct, P.onTimePct, true, '') : '') + '</td>' +
+          '<td class="num' + (S.avgDays > a.promise ? ' over' : '') + '">' + dash(S.avgDays) + '</td>' +
+          '<td class="num' + (S.lateCount ? ' over' : '') + '">' + S.lateCount + '</td><td>' + esc(slowestStage(S.stage)) + '</td>' +
+          '<td class="num">' + o.length + '</td><td class="num' + (red ? ' over' : '') + '">' + red + '</td><td class="num' + (stuck ? ' over' : '') + '">' + stuck + '</td></tr>';
+      }).join('') + '</tbody>';
+  }
+
+  function renderClients(cur) {
+    var by = {};
+    cur.forEach(function (r) {
+      if (!(r.late || r.stuck || r.flag === 'RED' || r.flag === 'AMBER' || r.flag === 'CLIENT LATE')) return;
+      var c = by[r.client] || (by[r.client] = { name: r.client, studios: [], cps: [], late: 0, slowest: 0, issues: [] });
+      if (c.studios.indexOf(r.studio) < 0) c.studios.push(r.studio);
+      if (c.cps.indexOf(r.producer) < 0) c.cps.push(r.producer);
+      if (r.late) c.late++;
+      if (r.productionDone) c.slowest = Math.max(c.slowest, r.production);
+      if (r.open && r.flag !== 'GREEN') c.issues.push('<span class="' + chipClass(r.flag) + '">' + esc(r.flag) + '</span> ' + esc(r.session));
+      if (r.open && r.stuck) c.issues.push('<span class="chip chip-STUCK">STUCK</span> ' + esc(r.session));
+    });
+    var list = Object.keys(by).map(function (k) { return by[k]; })
+      .sort(function (x, y) { return y.issues.length - x.issues.length || y.late - x.late; });
+    $('an-clients').innerHTML = '<thead><tr><th scope="col">Client</th><th scope="col">Studio</th><th scope="col">CP</th>' +
+      '<th scope="col" class="num">Sessions late</th><th scope="col" class="num">Slowest (days)</th><th scope="col">Open issues</th></tr></thead><tbody>' +
+      (list.length ? list.map(function (c) {
+        return '<tr><th scope="row">' + esc(c.name) + '</th><td>' + esc(c.studios.join(', ')) + '</td><td>' + esc(c.cps.join(', ')) + '</td>' +
+          '<td class="num' + (c.late ? ' over' : '') + '">' + c.late + '</td><td class="num">' + (c.slowest || '–') + '</td>' +
+          '<td class="issues">' + (c.issues.join('<br>') || '<span class="muted">None open</span>') + '</td></tr>';
+      }).join('') : '<tr><td colspan="6" class="muted">No clients affected in this window.</td></tr>') + '</tbody>';
   }
 
   // ---------- Events ----------
@@ -279,11 +518,12 @@
       if (state.view === 'analytics') loadAnalytics();
       return;
     }
-    if (t.dataset.days) { state.days = t.dataset.days; loadAnalytics(); return; }
+    if (t.dataset.period) { state.period = t.dataset.period; renderAnalytics(); return; }
   });
 
   $('flagged-toggle').addEventListener('click', function () { state.flagged = !state.flagged; render(); });
-  $('mine-toggle').addEventListener('click', function () { state.mine = !state.mine; render(); });
+  $('an-studio').addEventListener('change', function () { state.anStudio = this.value; renderAnalytics(); });
+  $('an-cp').addEventListener('change', function () { state.anCp = this.value; renderAnalytics(); });
   $('done-toggle').addEventListener('click', function () { state.showDone = !state.showDone; render(); });
   $('refresh').addEventListener('click', function () { load().then(function () { toast('Updated from the sheet'); }); });
   $('logout').addEventListener('click', function () {
@@ -346,58 +586,6 @@
     }).finally(function () { state.busy = false; });
   }
 
-  // ---------- Who are you? Then, for producers, which studio. ----------
-  var who = $('who-dialog');
-  var pendingName = null;
-  function showStep(step) {
-    $('who-step-name').hidden = step !== 'name';
-    $('who-step-studio').hidden = step !== 'studio';
-  }
-  function openWho(me) {
-    var d = state.data;
-    $('who-list').innerHTML = d.team.map(function (t) {
-      return '<button type="button" class="who-btn" data-who="' + esc(t.name) + '"><strong>' + esc(t.name) + '</strong>' +
-        '<span>' + esc(t.role + (t.studio ? ' · ' + t.studio : '')) + '</span></button>';
-    }).join('');
-    if (me && me.role === 'Producer') { pickStudio(me.name, me.auto); } else { showStep('name'); }
-    if (!who.open) who.showModal();
-  }
-  function pickStudio(name, auto) {
-    pendingName = name;
-    var t = state.data.team.filter(function (x) { return x.name === name; })[0] || {};
-    $('studio-hint').textContent = t.studio ? 'Your home studio is ' + t.studio + '. Pick another if you are covering a different one today.' : 'You will see everything in this studio.';
-    $('studio-list').innerHTML = state.data.studioNames.map(function (s) {
-      return '<button type="button" class="who-btn' + (s === t.studio ? ' is-home' : '') + '" data-pick-studio="' + esc(s) + '"><strong>' + esc(s) + '</strong>' +
-        '<span>' + (s === t.studio ? 'Home studio' : '&nbsp;') + '</span></button>';
-    }).join('');
-    $('who-back').hidden = !!auto;
-    showStep('studio');
-  }
-  function submitWho(name, studio) {
-    api('/api/whoami', { method: 'POST', body: JSON.stringify({ name: name, studio: studio || '' }) })
-      .then(function () { who.close(); state.defaulted = false; state.studio = 'All studios'; state.mine = false; return load(); })
-      .catch(function (err) { toast(err.message, true); });
-  }
-  who.addEventListener('cancel', function (e) { var me = state.data && state.data.me; if (!me || me.needsStudio) e.preventDefault(); });
-  who.addEventListener('click', function (e) {
-    var b = e.target.closest('button');
-    if (!b) return;
-    if (b.dataset.who) {
-      var t = state.data.team.filter(function (x) { return x.name === b.dataset.who; })[0];
-      if (t && t.role === 'Producer') pickStudio(t.name, false);
-      else submitWho(b.dataset.who);
-    } else if (b.dataset.pickStudio) {
-      submitWho(pendingName, b.dataset.pickStudio);
-    } else if (b.id === 'who-back') {
-      showStep('name');
-    }
-  });
-  $('switch-user').addEventListener('click', function () {
-    var me = state.data.me;
-    openWho(null);
-    if (me && me.auto && me.role === 'Producer') pickStudio(me.name, true);
-  });
-
   // ---------- Log session: client, studio (when the client has two), producer, name ----------
   var dlg = $('add-dialog');
   function meName() { return state.data.me && state.data.me.name; }
@@ -417,7 +605,7 @@
   }
   $('add-session').addEventListener('click', function () {
     var d = state.data, me = d.me;
-    var myStudio = me && me.studio;
+    var myStudio = null;
     var inStudio = function (n) { return myStudio && (d.clientStudios[n] || []).indexOf(myStudio) >= 0; };
     var first = d.clientNames.filter(inStudio), rest = d.clientNames.filter(function (n) { return !inStudio(n); });
     var opt = function (n) { return '<option>' + esc(n) + '</option>'; };
@@ -442,7 +630,7 @@
     var client = $('add-client').value;
     var studios = state.data.clientStudios[client] || [];
     var me = state.data.me;
-    var pick = (me && studios.indexOf(me.studio) >= 0) ? me.studio : studios[0];
+    var pick = studios[0];
     $('add-studio').innerHTML = studios.map(function (n) {
       return '<option' + (n === pick ? ' selected' : '') + '>' + esc(n) + '</option>';
     }).join('');
@@ -501,7 +689,7 @@
   load();
   // Keep the view current while it's left open on a screen.
   setInterval(function () {
-    if (document.hidden || state.busy || dlg.open || who.open || cdlg.open || recDlg.open) return;
+    if (document.hidden || state.busy || dlg.open || cdlg.open || recDlg.open) return;
     load();
   }, 60000);
 })();

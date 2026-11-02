@@ -23,14 +23,13 @@
     </nav>
     <div class="who">
       <span id="user-name"></span>
-      <button type="button" id="switch-user" class="link-btn" hidden>Switch</button>
       <button type="button" id="logout" class="link-btn">Sign out</button>
     </div>
   </div>
 </header>
 
 <div id="mock-banner" class="mock-banner" hidden>Preview with sample data. Nothing here is written to the real sheet.</div>
-<div id="readonly-banner" class="readonly-banner" hidden>View only. Producers, Ops and the CP Trainer update sessions.</div>
+<div id="readonly-banner" class="readonly-banner" hidden></div>
 
 <main class="wrap" id="board-view">
   <section class="intro">
@@ -40,7 +39,6 @@
     </div>
     <div class="toolbar" role="toolbar" aria-label="Filters">
       <div id="studio-filters" class="pills"></div>
-      <button type="button" id="mine-toggle" class="pill" aria-pressed="false" hidden>My sessions</button>
       <button type="button" id="flagged-toggle" class="pill" aria-pressed="false">Flagged only</button>
       <button type="button" id="done-toggle" class="pill" aria-pressed="false">Show finished</button>
       <button type="button" id="refresh" class="pill">Refresh</button>
@@ -57,8 +55,8 @@
     </div>
     <aside class="side">
       <section class="panel panel-red">
-        <h2>Needs Tamika</h2>
-        <p class="muted small">RED only. Everything else stays with the producer.</p>
+        <h2 id="esc-title">Needs Tamika</h2>
+        <p class="muted small" id="esc-sub">RED, or no Chaser update for too long.</p>
         <div id="escalations" class="stack"></div>
       </section>
       <section class="panel">
@@ -77,50 +75,67 @@
 <main class="wrap" id="analytics-view" hidden>
   <section class="intro">
     <div>
-      <h1>How each studio is doing</h1>
+      <h1>Session health</h1>
       <p id="an-sub" class="muted"></p>
-    </div>
-    <div class="toolbar" role="toolbar" aria-label="Time window">
-      <button type="button" class="pill" data-days="30" aria-pressed="true">Last 30 days</button>
-      <button type="button" class="pill" data-days="90" aria-pressed="false">Last 90 days</button>
-      <button type="button" class="pill" data-days="all" aria-pressed="false">All time</button>
     </div>
   </section>
 
-  <section id="an-kpis" class="kpis" aria-label="Overall"></section>
+  <section class="an-filters" role="toolbar" aria-label="Analytics filters">
+    <div class="pills" role="group" aria-label="Period">
+      <button type="button" class="pill" data-period="30" aria-pressed="true">Last 30 days</button>
+      <button type="button" class="pill" data-period="90" aria-pressed="false">Last 90 days</button>
+      <button type="button" class="pill" data-period="ytd" aria-pressed="false">This year</button>
+      <button type="button" class="pill" data-period="all" aria-pressed="false">All time</button>
+    </div>
+    <label class="select-wrap">Studio <select id="an-studio"></select></label>
+    <label class="select-wrap">CP <select id="an-cp"></select></label>
+  </section>
+
+  <section id="an-kpis" class="kpis" aria-label="Headline numbers"></section>
+
+  <section class="panel">
+    <h2>Right now</h2>
+    <p class="muted small">Every open session, whatever the period.</p>
+    <div id="an-health"></div>
+  </section>
+
+  <div class="an-grid">
+    <section class="panel">
+      <h2>On time vs late</h2>
+      <p class="muted small" id="trend-sub">Sessions by recording date. Late = content ready email after the 5-day promise, or still not sent past it.</p>
+      <div class="chart-box"><canvas id="chart-ontime" role="img" aria-label="Sessions on time and late per period"></canvas></div>
+    </section>
+    <section class="panel">
+      <h2>Days to content ready</h2>
+      <p class="muted small">Average business days from recording to the content ready email. Dashed line: the promise.</p>
+      <div class="chart-box"><canvas id="chart-days" role="img" aria-label="Average business days to content ready per period"></canvas></div>
+    </section>
+  </div>
+
+  <section class="panel">
+    <h2>By CP</h2>
+    <p class="muted small" id="cp-sub">Worst on-time rate first. Arrows compare with the previous period of the same length.</p>
+    <div class="table-wrap"><table class="an-table" id="an-cps"></table></div>
+  </section>
+
+  <section class="panel">
+    <h2>Where the time goes</h2>
+    <p class="muted small">Average business days in each stage. The longest bar is the bottleneck.</p>
+    <div class="chart-box chart-tall"><canvas id="chart-stages" role="img" aria-label="Average business days in each stage, by CP"></canvas></div>
+    <div class="table-wrap"><table class="an-table" id="an-stages"></table></div>
+  </section>
 
   <section class="panel">
     <h2>By studio</h2>
-    <p class="muted small">Days to client = business days from the end of recording to content in the client's inbox. The yellow marker is the 5-day promise.</p>
     <div class="table-wrap"><table class="an-table" id="an-studios"></table></div>
   </section>
 
   <section class="panel">
-    <h2>By content producer</h2>
-    <div class="table-wrap"><table class="an-table" id="an-producers"></table></div>
-  </section>
-
-  <section class="panel">
     <h2>Clients affected</h2>
-    <p class="muted small">Clients with a session past the 5-day promise or currently flagged, worst first.</p>
+    <p class="muted small">Clients with a session past the promise or flagged now, worst first.</p>
     <div class="table-wrap"><table class="an-table" id="an-clients"></table></div>
   </section>
 </main>
-
-<dialog id="who-dialog" aria-labelledby="who-title">
-  <div class="who-pick" id="who-step-name">
-    <h2 id="who-title">Who are you?</h2>
-    <p class="muted small">Asked once per sign-in. Your name goes on every update you make.</p>
-    <div id="who-list" class="who-list"></div>
-    <button type="button" class="pill who-viewer" data-who="__viewer">I'm not on this list, just viewing</button>
-  </div>
-  <div class="who-pick" id="who-step-studio" hidden>
-    <h2>Which studio are you in?</h2>
-    <p class="muted small" id="studio-hint"></p>
-    <div id="studio-list" class="who-list"></div>
-    <button type="button" class="pill who-viewer" id="who-back">Back</button>
-  </div>
-</dialog>
 
 <dialog id="add-dialog" aria-labelledby="add-title">
   <form id="add-form" method="dialog">
@@ -193,6 +208,7 @@
 </dialog>
 
 <div id="toast" class="toast" role="status" hidden></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <script src="/assets/app.js"></script>
 </body>
 </html>

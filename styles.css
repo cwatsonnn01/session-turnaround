@@ -202,3 +202,33 @@ dialog::backdrop { background: rgba(10,10,10,0.55); }
 .rec-step .radio { display: flex; align-items: center; gap: 8px; font-weight: 500; min-height: 32px; margin-top: 0; }
 #add-form .rec-step input[type=radio] { min-height: 0; width: 18px; height: 18px; accent-color: var(--ink); }
 #add-form input[type=date]:disabled { opacity: 0.5; }
+
+/* Chaser status, stuck */
+.s-clock .chaser { font-size: 12px; color: var(--ink); font-weight: 600; }
+.chips { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.chip-STUCK { background: #2B2B2B; color: #FFFFFF; }
+.alert-stuck { background: #ECECE7; color: #2B2B2B; }
+.alert-stuck strong { color: var(--ink); }
+
+/* Analytics */
+.an-filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.select-wrap { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; font-size: 14px; }
+.select-wrap select { min-height: 44px; padding: 0 10px; border: 1px solid #C9C9C2; border-radius: 8px; background: #fff; font: inherit; font-weight: 500; min-width: 150px; }
+.an-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); gap: 16px; }
+.chart-box { position: relative; height: 260px; }
+.chart-tall { height: 320px; }
+.health-row { display: flex; flex-wrap: wrap; gap: 28px; margin: 4px 0 12px; }
+.health-big { display: flex; flex-direction: column; }
+.health-big .value { font-family: var(--display); font-size: 44px; line-height: 1; letter-spacing: 0.02em; }
+.health-big .value.red { color: var(--red); }
+.health-big .label { font-size: 13px; color: var(--grey); font-weight: 600; }
+.seg { display: flex; gap: 2px; height: 18px; border-radius: 4px; overflow: hidden; }
+.seg span { display: block; min-width: 4px; }
+.seg-legend { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 16px; font-size: 13px; }
+.seg-legend li { display: inline-flex; align-items: center; gap: 6px; }
+.sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+.delta { font-size: 12px; font-weight: 700; white-space: nowrap; }
+.delta.up { color: var(--green); }
+.delta.down { color: var(--red); }
+.delta.flat { color: var(--grey); font-weight: 500; }
+.kpi .sub .delta { margin-right: 4px; }

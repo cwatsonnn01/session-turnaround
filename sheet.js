@@ -36,10 +36,10 @@ async function readAll() {
   if (cache.data && Date.now() - cache.at < 5000) return cache.data;
   const res = await api().spreadsheets.values.batchGet({
     spreadsheetId: SHEET_ID,
-    ranges: [`Sessions!A1:V${LAST_FORMULA_ROW}`, 'Clients!A1:D500', 'Settings!A1:C6', 'Studios!A1:B50', 'Team!A1:D50'],
+    ranges: [`Sessions!A1:AD${LAST_FORMULA_ROW}`, 'Clients!A1:D500', 'Settings!A1:C10', 'Studios!A1:B50', 'Team!A1:D50', 'Holidays!A1:A200'],
     valueRenderOption: 'FORMATTED_VALUE',
   });
-  const [sessions, clients, settings, studios, team] = res.data.valueRanges.map((r) => r.values || []);
+  const [sessions, clients, settings, studios, team, holidays] = res.data.valueRanges.map((r) => r.values || []);
   const data = {
     headers: sessions[0] || [],
     rows: sessions.slice(1),
@@ -47,6 +47,7 @@ async function readAll() {
     settings: settings.slice(1),
     studios: studios.slice(1),
     team: team.slice(1),
+    holidays: holidays.slice(1).map((r) => r[0]).filter(Boolean),
     asOf: todayLabel(),
   };
   cache = { at: Date.now(), data };
