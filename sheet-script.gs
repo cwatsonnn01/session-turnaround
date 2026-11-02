@@ -2,14 +2,17 @@
  * Session Turnaround: Chaser intake and Slack alerts.
  *
  * Lives inside the Session Turnaround Tracker sheet (Extensions > Apps Script).
- *  - doPost: Zapier forwards every Chaser status change here. The matching
- *    Sessions row is created or updated, keyed on the Chaser ID.
+ *  - pollChaser: every 10 minutes, reads Chaser's tasks.list API and compares
+ *    each session task's status with the sheet. A task that appears at
+ *    "Session wrapped" gets a new Sessions row; later moves fill in dates.
+ *  - doPost (optional): the same intake for anything that can POST updates.
  *  - checkAlerts: runs every hour. DMs the CP and the CP Trainer when a
  *    session turns AMBER, RED or stuck, sends the CP Trainer a morning
  *    summary, and (optionally) asks GHL to nudge late clients.
  *
  * Script properties (Project Settings > Script properties):
- *   SHARED_SECRET        required. Zapier sends it as "token".
+ *   CHASER_API_KEY       Chaser API key (Bearer token). Never put it in the code.
+ *   SHARED_SECRET        made by setup(); only needed if something POSTs to doPost.
  *   SLACK_BOT_TOKEN      xoxb-... token of the Demandii Slack app.
  *   DASHBOARD_URL        https://session-turnaround.onrender.com
  *   GHL_REVIEW_WEBHOOK   GHL inbound webhook: "content ready" email to the client.
@@ -127,6 +130,13 @@ function handleChaserEvent_(ev) {
 
   var setOnce = function (col) { if (!t.get(r, col)) { t.set(r, col, day); return true; } return false; };
   var startedClock = false;
+
+  // A checklist that skips "Content ready" in Chaser would leave the clock running
+  // forever. Assume it was sent today, note it, and don't email the client.
+  if (kind !== 'wrapped' && kind !== 'ready' && !t.get(r, COL.sent)) {
+    t.set(r, COL.sent, day);
+    problems.push('Content ready was skipped in Chaser, so its date was set to ' + day + ' (no client email sent)');
+  }
 
   switch (kind) {
     case 'wrapped':
@@ -460,15 +470,17 @@ function safe_(v) { return /^[=+\-@]/.test(String(v)) ? "'" + v : v; }
 
 // ---------------------------------------------------------------- setup
 
-/** Run once from the editor: creates the secret and the hourly trigger. */
+/** Run once from the editor: turns on the Chaser check (every 10 min) and the hourly alerts. */
 function setup() {
   var props = PropertiesService.getScriptProperties();
   if (!props.getProperty('SHARED_SECRET')) props.setProperty('SHARED_SECRET', Utilities.getUuid());
   ScriptApp.getProjectTriggers().forEach(function (tr) {
-    if (tr.getHandlerFunction() === 'checkAlerts') ScriptApp.deleteTrigger(tr);
+    if (tr.getHandlerFunction() === 'checkAlerts' || tr.getHandlerFunction() === 'pollChaser') ScriptApp.deleteTrigger(tr);
   });
   ScriptApp.newTrigger('checkAlerts').timeBased().everyHours(1).create();
-  Logger.log('Hourly alerts are on. Your SHARED_SECRET for Zapier is: ' + props.getProperty('SHARED_SECRET'));
+  ScriptApp.newTrigger('pollChaser').timeBased().everyMinutes(10).create();
+  Logger.log(props.getProperty('CHASER_API_KEY') ? 'Chaser check (every 10 min) and hourly alerts are on.'
+    : 'Alerts are on, but CHASER_API_KEY is missing: add it in Project Settings > Script properties.');
 }
 
 /** Run from the editor to try the intake without Zapier. Writes a TEST row. */
@@ -478,4 +490,172 @@ function testChaserEvent() {
     studio: 'Studio 5', cp_email: 'dave@demandii.com'
   });
   Logger.log(JSON.stringify(res));
+}
+
+// ---------------------------------------------------------------- Chaser polling
+
+var BASELINE_PROP = 'CHASER_BASELINE_AT';
+
+/** Every 10 minutes. Reads all Chaser tasks and applies any session status changes. */
+function pollChaser() {
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(60000)) return; // the previous run is still going
+  try {
+    return runPoll_(Date.now());
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function runPoll_(now) {
+  var ss = SpreadsheetApp.getActive();
+  var props = PropertiesService.getScriptProperties();
+  var tasks;
+  try {
+    tasks = fetchChaserTasks_();
+  } catch (err) {
+    apiProblem_(ss, String(err.message || err), now);
+    return { ok: false, error: String(err.message || err) };
+  }
+  props.deleteProperty('LAST_API_ERROR_AT');
+
+  // First run: only sessions created from now on are tracked.
+  var baseline = Number(props.getProperty(BASELINE_PROP));
+  if (!baseline) {
+    props.setProperty(BASELINE_PROP, String(now));
+    ss.getSheetByName('Events').appendRow([new Date(), '', '', '', '', '', '', 'Chaser connected: ' + tasks.length +
+      ' tasks read. Sessions created from now on will be tracked.']);
+    return { ok: true, baseline: true, tasks: tasks.length };
+  }
+
+  var t = table_(ss.getSheetByName('Sessions'));
+  var tracked = {};
+  for (var r = 2; r <= t.lastRow(); r++) {
+    var id = String(t.get(r, COL.chaserId) || '').trim();
+    if (id) tracked[id] = String(t.get(r, COL.chaserStatus) || '').trim().toLowerCase();
+  }
+  var ctx = matchContext_(ss);
+  var applied = 0;
+  tasks.forEach(function (task) {
+    var label = clean_(task.custom_status_label || task.status_label);
+    var kind = STATUS[label.toLowerCase()];
+    if (!kind) return;
+    var id = String(task.id);
+    if (tracked.hasOwnProperty(id)) {
+      if (tracked[id] === label.toLowerCase()) return; // no change
+    } else {
+      // New sessions start at "Session wrapped" on a task made after the baseline.
+      var created = Date.parse(task.created_at) || 0;
+      if (kind !== 'wrapped' || created < baseline - 5 * 60 * 1000) return;
+    }
+    handleChaserEvent_(chaserEvent_(task, label, ctx));
+    applied++;
+  });
+  return { ok: true, tasks: tasks.length, applied: applied };
+}
+
+function fetchChaserTasks_() {
+  var key = PropertiesService.getScriptProperties().getProperty('CHASER_API_KEY');
+  if (!key) throw new Error('CHASER_API_KEY is not set in Script properties');
+  var base = 'https://api.trychaser.com/v2/tasks.list';
+  var tasks = [], cursor = null, pages = 0;
+  do {
+    var url = base + '?include_completed=true&limit=100' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
+    var res = UrlFetchApp.fetch(url, { headers: { Authorization: 'Bearer ' + key }, muteHttpExceptions: true });
+    var body = {};
+    try { body = JSON.parse(res.getContentText() || '{}'); } catch (e) { body = {}; }
+    if (res.getResponseCode() >= 300 || body.ok === false) {
+      throw new Error('Chaser API ' + res.getResponseCode() + ': ' + String(body.error || res.getContentText()).slice(0, 200));
+    }
+    tasks = tasks.concat(body.tasks || []);
+    cursor = (body.response_metadata && body.response_metadata.next_cursor) || null;
+    pages++;
+  } while (cursor && pages < 200);
+  return tasks;
+}
+
+/** Logs every failure; tells Ops at most once every 2 hours. */
+function apiProblem_(ss, message, now) {
+  ss.getSheetByName('Events').appendRow([new Date(), '', '', '', '', '', '', 'Chaser check failed: ' + message]);
+  var props = PropertiesService.getScriptProperties();
+  var last = Number(props.getProperty('LAST_API_ERROR_AT')) || 0;
+  if (now - last > 2 * 3600 * 1000) {
+    props.setProperty('LAST_API_ERROR_AT', String(now));
+    notifyOps_(ss, 'The Chaser check is failing, so sessions are not updating: ' + message);
+  }
+}
+
+// --- working out client, studio and CP from a Chaser task
+
+function norm_(s) { return ' ' + String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim() + ' '; }
+
+function matchContext_(ss) {
+  var clients = clientStudios_(ss);
+  var names = Object.keys(clients).map(function (k) { return clients[k].name; })
+    .sort(function (a, b) { return b.length - a.length; }); // longest first: "OTR Solutions" before "OTR"
+  return { clients: clients, names: names, team: teamRows_(ss) };
+}
+
+/** Tags first, then the Slack channel, then the task title. */
+function taskTexts_(task) {
+  return [(task.tags || []).join(' | '), task.channel ? task.channel.name : '', task.raw_summary || task.summary || ''];
+}
+
+function findClient_(task, ctx) {
+  var texts = taskTexts_(task);
+  for (var i = 0; i < texts.length; i++) {
+    var hay = norm_(texts[i]);
+    for (var j = 0; j < ctx.names.length; j++) {
+      var n = norm_(ctx.names[j]);
+      if (n.trim() && hay.indexOf(n) >= 0) return ctx.names[j];
+    }
+  }
+  return '';
+}
+
+function findStudio_(task) {
+  var texts = taskTexts_(task);
+  for (var i = 0; i < texts.length; i++) {
+    var m = /studio\s*[-_#]?\s*(\d+)/i.exec(texts[i]);
+    if (m) return 'Studio ' + Number(m[1]);
+  }
+  return '';
+}
+
+/** The assigned CP on the Team tab; otherwise any listed team member; otherwise the first assignee. */
+function findCp_(task, ctx) {
+  var emails = (task.assignees || []).map(function (a) { return String(a.email || '').toLowerCase(); }).filter(String);
+  if (task.creator && task.creator.email) emails.push(String(task.creator.email).toLowerCase());
+  var byEmail = {};
+  ctx.team.forEach(function (p) { if (p.email) byEmail[p.email] = p; });
+  var producer = emails.filter(function (e) { return byEmail[e] && byEmail[e].role === 'Producer'; })[0];
+  return producer || emails.filter(function (e) { return byEmail[e]; })[0] || emails[0] || '';
+}
+
+function chaserEvent_(task, label, ctx) {
+  var client = findClient_(task, ctx);
+  return {
+    chaser_id: String(task.id),
+    status: label,
+    client: client || (task.channel && task.channel.name) || '',
+    session: clean_(task.raw_summary || task.summary).slice(0, 120),
+    studio: findStudio_(task),
+    cp_email: findCp_(task, ctx)
+  };
+}
+
+/** Run from the editor: shows what the script would track, without changing anything. */
+function previewChaser() {
+  var ss = SpreadsheetApp.getActive();
+  var tasks = fetchChaserTasks_();
+  var ctx = matchContext_(ss);
+  var lines = [];
+  tasks.forEach(function (task) {
+    var label = clean_(task.custom_status_label || task.status_label);
+    if (!STATUS[label.toLowerCase()]) return;
+    var ev = chaserEvent_(task, label, ctx);
+    lines.push([label, ev.session, 'client: ' + (findClient_(task, ctx) || 'NOT FOUND (' + ev.client + ')'),
+      'studio: ' + (ev.studio || 'NOT FOUND'), 'CP: ' + (ev.cp_email || 'NOT FOUND')].join(' | '));
+  });
+  Logger.log(tasks.length + ' Chaser tasks read, ' + lines.length + ' with a session status:\n' + lines.join('\n'));
 }

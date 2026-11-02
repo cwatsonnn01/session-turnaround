@@ -100,7 +100,7 @@ Producers (CPs) don't log anything in the dashboard. Moving a client's checklist
 | client approved | Approved |
 | scheduled | Scheduled in Planable |
 
-Flow: Chaser webhook → Zapier (Catch Hook) → POST to the sheet script (`sheet-script.gs`, pasted into the sheet's Extensions → Apps Script and deployed as a web app). The script also runs hourly: AMBER, RED and stuck alerts by Slack DM, a morning summary to the CP Trainer, and (when switched on in Settings) the GHL client nudge. Every update is logged on the Events tab.
+Flow: the sheet script (`sheet-script.gs`, pasted into the sheet's Extensions → Apps Script) reads Chaser's `tasks.list` API every 10 minutes and compares each session task's status with the Sessions tab. A task created after go-live and set to "Session wrapped" gets a row; later status changes fill in dates. Client, studio and CP are matched from the task's tags, Slack channel, title and assignees (`previewChaser` shows the matches without writing). The Chaser key lives in Script properties as `CHASER_API_KEY`. The script also runs hourly: AMBER, RED and stuck alerts by Slack DM, a morning summary to the CP Trainer, and (when switched on in Settings) the GHL client nudge. Every update is logged on the Events tab.
 
 `node sheet-script.test.js` runs the script against a fake spreadsheet, Slack and GHL.
 

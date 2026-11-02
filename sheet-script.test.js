@@ -32,8 +32,8 @@ function makeWorld(opts = {}) {
   };
   for (let i = 0; i < 20; i++) tabs.Sessions.push(SESSIONS_HEADERS.map(() => ''));
   const props = Object.assign({ SHARED_SECRET: 's3cret', SLACK_BOT_TOKEN: 'xoxb', DASHBOARD_URL: 'https://x.test',
-    GHL_REVIEW_WEBHOOK: 'https://ghl.test/review', GHL_NUDGE_WEBHOOK: 'https://ghl.test/nudge', OPS_ALERT_EMAIL: 'christina@demandii.com' }, opts.props || {});
-  const slack = []; const ghl = [];
+    CHASER_API_KEY: 'test-key', GHL_REVIEW_WEBHOOK: 'https://ghl.test/review', GHL_NUDGE_WEBHOOK: 'https://ghl.test/nudge', OPS_ALERT_EMAIL: 'christina@demandii.com' }, opts.props || {});
+  const slack = []; const ghl = []; const chaser = { pages: [[]], calls: 0, fail: null };
   const sheet = (name) => ({
     getName: () => name,
     getDataRange: () => ({ getValues: () => tabs[name].map((r) => r.slice()) }),
@@ -49,8 +49,8 @@ function makeWorld(opts = {}) {
   });
   const ctx = {
     SpreadsheetApp: { getActive: () => ({ getSheetByName: (n) => sheet(n) }) },
-    PropertiesService: { getScriptProperties: () => ({ getProperty: (k) => props[k] ?? null, setProperty: (k, v) => { props[k] = v; } }) },
-    LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
+    PropertiesService: { getScriptProperties: () => ({ getProperty: (k) => props[k] ?? null, setProperty: (k, v) => { props[k] = v; }, deleteProperty: (k) => { delete props[k]; } }) },
+    LockService: { getScriptLock: () => ({ waitLock() {}, tryLock() { return true; }, releaseLock() {} }) },
     ContentService: { createTextOutput: (t) => ({ setMimeType: () => ({ text: t }) }), MimeType: { JSON: 'json' } },
     UrlFetchApp: {
       fetch: (url, o = {}) => {
@@ -60,6 +60,14 @@ function makeWorld(opts = {}) {
           return { getContentText: () => JSON.stringify(ok ? { ok: true, user: { id: 'U_' + email.split('@')[0].toUpperCase() } } : { ok: false, error: 'users_not_found' }) };
         }
         if (url.includes('chat.postMessage')) { slack.push(JSON.parse(o.payload)); return { getContentText: () => '{"ok":true}' }; }
+        if (url.includes('tasks.list')) {
+          chaser.calls++;
+          assert.strictEqual(o.headers.Authorization, 'Bearer test-key');
+          if (chaser.fail) return { getResponseCode: () => 401, getContentText: () => JSON.stringify({ ok: false, error: chaser.fail }) };
+          const m = /cursor=(\d+)/.exec(url); const i = m ? Number(m[1]) : 0;
+          const next = i + 1 < chaser.pages.length ? String(i + 1) : '';
+          return { getResponseCode: () => 200, getContentText: () => JSON.stringify({ ok: true, tasks: chaser.pages[i], response_metadata: { next_cursor: next } }) };
+        }
         ghl.push({ url, body: JSON.parse(o.payload) });
         return { getResponseCode: () => 200, getContentText: () => '{}' };
       },
@@ -86,7 +94,7 @@ function makeWorld(opts = {}) {
   const col = (n) => SESSIONS_HEADERS.indexOf(n);
   const row = (r) => Object.fromEntries(SESSIONS_HEADERS.map((h, i) => [h, tabs.Sessions[r - 1][i]]));
   const post = (body) => JSON.parse(ctx.doPost({ postData: { contents: JSON.stringify(Object.assign({ token: 's3cret' }, body)) } }).text);
-  return { tabs, ctx, slack, ghl, props, row, col, post };
+  return { tabs, ctx, slack, ghl, props, row, col, post, chaser };
 }
 
 let n = 0;
@@ -289,6 +297,124 @@ test('business days skip weekends and holidays', () => {
   const w = makeWorld();
   assert.strictEqual(w.ctx.addBusinessDays_('2026-12-21', 5, ['2026-12-25']), '2026-12-29');
   assert.strictEqual(w.ctx.addBusinessDays_('2026-11-06', 1, []), '2026-11-09');
+});
+
+// ---- Chaser polling, using the task shape from the existing churn Zap.
+const task = (o) => Object.assign({
+  id: 'T1', summary: 'Session 9', raw_summary: 'Session 9', custom_status_label: 'Session wrapped', status_label: 'Open',
+  tags: ['Zuar', 'Studio 5'], channel: { name: 'client-zuar' }, link: 'https://chaser/T1', created_at: '2026-11-02T15:00:00Z',
+  assignees: [{ email: 'dave@demandii.com' }], creator: { email: 'christina@demandii.com', display_name: 'Tina' }
+}, o);
+const T0 = Date.parse('2026-11-02T14:00:00Z');
+
+test('first poll only sets the baseline', () => {
+  const w = makeWorld();
+  w.chaser.pages = [[task({ created_at: '2026-10-30T15:00:00Z' })]];
+  const res = w.ctx.runPoll_(T0);
+  assert.strictEqual(res.baseline, true);
+  assert.strictEqual(w.props.CHASER_BASELINE_AT, String(T0));
+  assert.strictEqual(w.row(2).Client, '');
+});
+
+test('a new task at Session wrapped becomes a row; old and non-session tasks are ignored', () => {
+  const w = makeWorld();
+  w.props.CHASER_BASELINE_AT = String(T0);
+  w.chaser.pages = [[
+    task({}),
+    task({ id: 'OLD', created_at: '2026-10-20T15:00:00Z' }),                       // made before go-live
+    task({ id: 'DESIGN', custom_status_label: 'In review', tags: ['Zuar'] }),      // not a session status
+    task({ id: 'SKIP', custom_status_label: 'Content ready' }),                    // first seen past Session wrapped
+  ]];
+  const res = w.ctx.runPoll_(T0 + 3600e3);
+  assert.strictEqual(res.applied, 1);
+  const r = w.row(2);
+  assert.strictEqual(r['Chaser ID'], 'T1');
+  assert.strictEqual(r.Client, 'Zuar');
+  assert.strictEqual(r.Studio, 'Studio 5');
+  assert.strictEqual(r.Producer, 'Dave Johnson');
+  assert.strictEqual(r.Session, 'Session 9');
+  assert.ok(r.Recorded);
+  assert.strictEqual(w.row(3).Client, '');
+  assert.ok(w.slack.some((m) => /Countdown started/.test(m.text)));
+});
+
+test('pages are followed and unchanged tasks are not rewritten', () => {
+  const w = makeWorld();
+  w.props.CHASER_BASELINE_AT = String(T0);
+  w.chaser.pages = [[task({ id: 'A' })], [task({ id: 'B', tags: ['OTR Solutions', 'Studio 1'] })]];
+  assert.strictEqual(w.ctx.runPoll_(T0 + 1e6).applied, 2);
+  assert.strictEqual(w.chaser.calls, 2);
+  const events = w.tabs.Events.length;
+  assert.strictEqual(w.ctx.runPoll_(T0 + 2e6).applied, 0);
+  assert.strictEqual(w.tabs.Events.length, events);
+});
+
+test('moves through the statuses fill the dates and email the client once', () => {
+  const w = makeWorld();
+  w.props.CHASER_BASELINE_AT = String(T0);
+  const step = (label) => { w.chaser.pages = [[task({ custom_status_label: label })]]; return w.ctx.runPoll_(T0 + 1e6); };
+  step('Session wrapped');
+  step('Content ready');
+  step('Content ready');
+  step('requested changes');
+  step('changes sent back');
+  step('client approved');
+  step('scheduled');
+  const r = w.row(2);
+  ['Recorded', 'Sent to client', 'Client responded', 'Rework returned', 'Approved', 'Scheduled in Planable'].forEach((c) => assert.ok(r[c], c));
+  assert.strictEqual(r['Rework rounds'], 1);
+  assert.strictEqual(r['Chaser status'], 'scheduled');
+  assert.strictEqual(w.ghl.filter((g) => g.url.endsWith('/review')).length, 1);
+});
+
+test('skipping Content ready still stops the clock, with a note and no client email', () => {
+  const w = makeWorld();
+  w.props.CHASER_BASELINE_AT = String(T0);
+  w.chaser.pages = [[task({})]];
+  w.ctx.runPoll_(T0 + 1e6);
+  w.chaser.pages = [[task({ custom_status_label: 'client approved' })]];
+  w.ctx.runPoll_(T0 + 2e6);
+  const r = w.row(2);
+  assert.ok(r['Sent to client']);
+  assert.ok(/Content ready was skipped/.test(r.Notes), r.Notes);
+  assert.strictEqual(w.ghl.length, 0);
+});
+
+test('client from the channel or title; studio from the title; unknown client is flagged', () => {
+  const w = makeWorld();
+  w.props.CHASER_BASELINE_AT = String(T0);
+  w.chaser.pages = [[
+    task({ id: 'C1', tags: [], channel: { name: 'kairos-blueprint' }, summary: 'Studio-3 session', raw_summary: 'Studio-3 session' }),
+    task({ id: 'C2', tags: [], channel: { name: 'general' }, summary: 'OTR Solutions podcast', raw_summary: 'OTR Solutions podcast' }),
+    task({ id: 'C3', tags: [], channel: { name: 'acme-corp' }, summary: 'Session 1', raw_summary: 'Session 1' }),
+  ]];
+  w.ctx.runPoll_(T0 + 1e6);
+  assert.strictEqual(w.row(2).Client, 'Kairos Blueprint');
+  assert.strictEqual(w.row(2).Studio, 'Studio 3');
+  assert.strictEqual(w.row(3).Client, 'OTR Solutions');
+  assert.strictEqual(w.row(3).Studio, 'Studio 1'); // its only studio
+  assert.strictEqual(w.row(4).Client, 'acme-corp');
+  assert.ok(/client not on Clients tab/.test(w.row(4).Notes));
+});
+
+test('API failure is logged every time but Ops is told once', () => {
+  const w = makeWorld();
+  w.props.CHASER_BASELINE_AT = String(T0);
+  w.chaser.fail = 'invalid_auth';
+  w.ctx.runPoll_(T0 + 1e6);
+  w.ctx.runPoll_(T0 + 2e6);
+  assert.strictEqual(w.tabs.Events.filter((e) => /Chaser check failed/.test(e[7])).length, 2);
+  assert.strictEqual(w.slack.filter((m) => /Chaser check is failing/.test(m.text)).length, 1);
+  w.chaser.fail = null; w.chaser.pages = [[]];
+  w.ctx.runPoll_(T0 + 3e6);
+  assert.strictEqual(w.props.LAST_API_ERROR_AT, undefined);
+});
+
+test('no API key: clear message, nothing written', () => {
+  const w = makeWorld({ props: { CHASER_API_KEY: '' } });
+  const res = w.ctx.runPoll_(T0);
+  assert.strictEqual(res.ok, false);
+  assert.ok(/CHASER_API_KEY/.test(res.error));
 });
 
 console.log(`\n${n} tests passed`);
